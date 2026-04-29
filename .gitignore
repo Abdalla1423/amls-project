@@ -1,4 +1,5 @@
 venv/
+.venv/
 __pycache__/
 *.pyc
 *.pyo
@@ -21,3 +22,7 @@ dist/
 build/
 *.egg-info/
 *.egg
+
+# Runtime directories (not submitted)
+solution/data/
+solution/artifacts/
