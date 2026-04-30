@@ -26,3 +26,4 @@ build/
 # Runtime directories (not submitted)
 solution/data/
 solution/artifacts/
+data/
