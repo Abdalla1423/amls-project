@@ -48,7 +48,7 @@ def build_cnn(k=K):
         nn.MaxPool2d(2),
         nn.Conv2d(4*k, 4*k, 3, padding=1), nn.BatchNorm2d(4*k), nn.ReLU(),
         nn.AdaptiveAvgPool2d(1),
-        nn.Flatten(), nn.Dropout(0.3), nn.Linear(4*k, 2),
+        nn.Flatten(), nn.Dropout(0.5), nn.Linear(4*k, 2),
     )
 
 

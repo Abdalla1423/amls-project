@@ -1,8 +1,9 @@
 """train_augmented.py - Augmented/robust model training (Task 3).
 
-Fine-tunes the Task 2 model with random image augmentations to improve
-robustness against perturbed/augmented images.  Calibrates threshold on
-calibration_augmented to enforce FPR <= 20%.
+Trains the CNN from scratch with heavy data augmentation to improve
+generalization to unseen image distributions.  Adds calibration_augmented
+data to the training pool.  Calibrates threshold on calibration_augmented
+to enforce FPR <= 20%.
 
 Usage: python train_augmented.py --timeout_seconds 1800
 """
@@ -27,7 +28,7 @@ ARTIFACTS_DIR = os.path.join(os.path.dirname(__file__), "artifacts")
 TASK03_DIR = os.path.join(ARTIFACTS_DIR, "task03")
 
 BATCH_SIZE = 64
-LR = 3e-4           # moderate LR for fine-tuning
+LR = 5e-4
 K = 32
 MAX_FPR = 0.20
 SEED = 42
@@ -58,7 +59,7 @@ def build_cnn(k=K):
         nn.AdaptiveAvgPool2d(1),
         # Classifier
         nn.Flatten(),
-        nn.Dropout(0.3),
+        nn.Dropout(0.5),
         nn.Linear(4 * k, 2),
     )
 
@@ -67,50 +68,60 @@ def build_cnn(k=K):
 # Augmentation (applied on-the-fly as tensor ops)
 # ---------------------------------------------------------------------------
 def augment_batch(x):
-    """Apply mild random augmentations to a batch of images (N, 3, H, W).
+    """Apply heavy random augmentations to a batch of images (N, 3, H, W).
 
-    Only ~50% of images in the batch are augmented; the rest stay clean.
-    This preserves the model's ability on clean images while building
-    robustness to perturbations.
+    ~80% of images are augmented with strong transforms to improve
+    generalization to unseen image distributions.
     """
     n, c, h, w = x.shape
 
-    # Decide which images to augment (~50%)
-    aug_mask = torch.rand(n) < 0.5
+    # Decide which images to augment (~80%)
+    aug_mask = torch.rand(n) < 0.8
     x_aug = x[aug_mask].clone()
     n_aug = x_aug.shape[0]
     if n_aug == 0:
         return x
 
-    # Gaussian noise (mild, applied to ~40% of augmented images)
-    noise_mask = torch.rand(n_aug, 1, 1, 1) < 0.4
-    noise = torch.randn_like(x_aug) * 0.03
+    # --- Per-image transforms (applied independently) ---
+
+    # Gaussian noise (σ = 0.05-0.12, applied to ~60%)
+    noise_mask = torch.rand(n_aug, 1, 1, 1) < 0.6
+    sigma = 0.05 + torch.rand(n_aug, 1, 1, 1) * 0.07  # [0.05, 0.12]
+    noise = torch.randn_like(x_aug) * sigma
     x_aug = x_aug + noise * noise_mask.float()
 
-    # Brightness jitter (applied to ~30% of augmented images)
-    bright_mask = torch.rand(n_aug, 1, 1, 1) < 0.3
-    bright_shift = (torch.rand(n_aug, 1, 1, 1) - 0.5) * 0.15  # [-0.075, 0.075]
+    # Brightness jitter (±0.20, applied to ~50%)
+    bright_mask = torch.rand(n_aug, 1, 1, 1) < 0.5
+    bright_shift = (torch.rand(n_aug, 1, 1, 1) - 0.5) * 0.40  # [-0.20, 0.20]
     x_aug = x_aug + bright_shift * bright_mask.float()
 
-    # Contrast jitter (applied to ~30% of augmented images)
-    contrast_mask = torch.rand(n_aug, 1, 1, 1) < 0.3
-    contrast_factor = 0.85 + torch.rand(n_aug, 1, 1, 1) * 0.3  # [0.85, 1.15]
+    # Contrast jitter ([0.6, 1.4], applied to ~50%)
+    contrast_mask = torch.rand(n_aug, 1, 1, 1) < 0.5
+    contrast_factor = 0.6 + torch.rand(n_aug, 1, 1, 1) * 0.8  # [0.6, 1.4]
     mean = x_aug.mean(dim=(2, 3), keepdim=True)
-    x_aug = torch.where(contrast_mask, mean + (x_aug - mean) * contrast_factor, x_aug)
+    x_aug = torch.where(contrast_mask, mean + (x_aug - mean)
+                        * contrast_factor, x_aug)
 
-    # Random downscale + upscale (applied to ~20% of augmented batch)
-    if torch.rand(1).item() < 0.2:
-        scale = np.random.choice([0.6, 0.75, 0.8])
+    # Per-channel color jitter (applied to ~40%)
+    color_mask = torch.rand(n_aug, 1, 1, 1) < 0.4
+    color_shift = (torch.rand(n_aug, c, 1, 1) - 0.5) * 0.16  # [-0.08, 0.08]
+    x_aug = x_aug + color_shift * color_mask.float()
+
+    # --- Batch-level transforms ---
+
+    # Random downscale + upscale (applied to ~30%)
+    if torch.rand(1).item() < 0.3:
+        scale = np.random.choice([0.4, 0.5, 0.6, 0.75])
         small_h, small_w = int(h * scale), int(w * scale)
         x_aug = F.interpolate(x_aug, size=(small_h, small_w), mode="bilinear",
                               align_corners=False)
         x_aug = F.interpolate(x_aug, size=(h, w), mode="bilinear",
                               align_corners=False)
 
-    # Gaussian blur (applied to ~20% of augmented batch)
-    if torch.rand(1).item() < 0.2:
-        k_size = 3
-        sigma = np.random.uniform(0.5, 1.0)
+    # Gaussian blur (applied to ~30%)
+    if torch.rand(1).item() < 0.3:
+        k_size = np.random.choice([3, 5])
+        sigma = np.random.uniform(0.5, 1.5)
         ax = torch.arange(k_size, dtype=torch.float32) - k_size // 2
         kernel_1d = torch.exp(-ax ** 2 / (2 * sigma ** 2))
         kernel_1d = kernel_1d / kernel_1d.sum()
@@ -120,9 +131,18 @@ def augment_batch(x):
         x_aug = F.conv2d(F.pad(x_aug, [pad] * 4, mode="reflect"),
                          kernel_2d, groups=c)
 
-    # Horizontal flip (applied to ~50% of augmented images)
+    # Horizontal flip (~50%)
     flip_mask = torch.rand(n_aug) < 0.5
     x_aug[flip_mask] = x_aug[flip_mask].flip(-1)
+
+    # CutOut / random erasing (~40% of augmented images)
+    for i in range(n_aug):
+        if torch.rand(1).item() < 0.4:
+            eh = int(h * np.random.uniform(0.1, 0.3))
+            ew = int(w * np.random.uniform(0.1, 0.3))
+            y0 = np.random.randint(0, h - eh + 1)
+            x0 = np.random.randint(0, w - ew + 1)
+            x_aug[i, :, y0:y0 + eh, x0:x0 + ew] = torch.rand(c, 1, 1)
 
     x[aug_mask] = x_aug.clamp(0.0, 1.0)
     return x
@@ -209,24 +229,23 @@ def main():
         sys.exit(1)
 
     X_tr, y_tr = train_data
+
+    # Add calibration_augmented data to training pool for more diversity
+    if cal_aug is not None:
+        X_tr = np.concatenate([X_tr, cal_aug[0]], axis=0)
+        y_tr = np.concatenate([y_tr, cal_aug[1]], axis=0)
+        print(f"Added cal_aug to training: +{cal_aug[0].shape[0]} samples")
+
     print(f"Train: {X_tr.shape}  real={int((y_tr == 0).sum())}  "
           f"ai={int((y_tr == 1).sum())}")
 
-    # Load Task 2 model as starting point
+    # Train from scratch with heavy augmentation (dropout=0.5)
     model = build_cnn(K)
-    ckpt_path = os.path.join(ARTIFACTS_DIR, "best_model.pt")
-    if os.path.exists(ckpt_path):
-        ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-        model.load_state_dict(ckpt["state_dict"])
-        print(f"Loaded Task 2 checkpoint: {ckpt_path}")
-        print(f"  Task 2 recall_ai={ckpt.get('recall_ai', '?')} "
-              f"thr={ckpt.get('threshold', '?')}")
-    else:
-        print("Warning: No Task 2 checkpoint found, training from scratch.")
+    print("Training from scratch with heavy augmentation & dropout=0.5")
 
-    # Optimizer & scheduler for fine-tuning
+    # Optimizer & scheduler
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=1e-3)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=15)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=20)
 
     # Class weights
     n_real = int((y_tr == 0).sum())
