@@ -25,7 +25,7 @@ ARTIFACTS_DIR = os.path.join(os.path.dirname(__file__), "artifacts")
 TASK02_DIR = os.path.join(ARTIFACTS_DIR, "task02")
 PREDICT_DIR = os.path.join(DATA_DIR, "predict")
 
-TARGET_SIZE = (128, 128)
+TARGET_SIZE = (64, 64)
 K = 32
 BATCH_SIZE = 64
 
@@ -45,6 +45,8 @@ def build_cnn(k=K):
         nn.Conv2d(k, 2*k, 3, padding=1), nn.BatchNorm2d(2*k), nn.ReLU(),
         nn.MaxPool2d(2),
         nn.Conv2d(2*k, 4*k, 3, padding=1), nn.BatchNorm2d(4*k), nn.ReLU(),
+        nn.MaxPool2d(2),
+        nn.Conv2d(4*k, 4*k, 3, padding=1), nn.BatchNorm2d(4*k), nn.ReLU(),
         nn.AdaptiveAvgPool2d(1),
         nn.Flatten(), nn.Dropout(0.3), nn.Linear(4*k, 2),
     )
@@ -60,7 +62,7 @@ def load_parquet_dir(directory):
 
 def img_to_tensor(img_bytes):
     img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
-    img = img.resize(TARGET_SIZE, Image.LANCZOS)
+    img = img.resize(TARGET_SIZE, Image.BICUBIC)
     arr = np.array(img, dtype=np.float32) / 255.0
     return torch.from_numpy(arr.transpose(2, 0, 1))
 
