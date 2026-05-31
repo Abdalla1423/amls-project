@@ -172,7 +172,7 @@ def clean(df):
     print(f"  Labels: {df['label'].value_counts().sort_index().to_dict()}")
     return df
 
-
+# average pixel value, down scaled image
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--timeout_seconds", type=int, default=600)
