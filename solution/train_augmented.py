@@ -31,6 +31,7 @@ BATCH_SIZE = 64
 LR = 5e-4
 K = 32
 MAX_FPR = 0.20
+CAL_MARGIN = 0.85    # calibration safety margin (fraction of MAX_FPR)
 SEED = 42
 
 torch.manual_seed(SEED)
@@ -135,14 +136,18 @@ def augment_batch(x):
     flip_mask = torch.rand(n_aug) < 0.5
     x_aug[flip_mask] = x_aug[flip_mask].flip(-1)
 
-    # CutOut / random erasing (~40% of augmented images)
-    for i in range(n_aug):
-        if torch.rand(1).item() < 0.4:
-            eh = int(h * np.random.uniform(0.1, 0.3))
-            ew = int(w * np.random.uniform(0.1, 0.3))
-            y0 = np.random.randint(0, h - eh + 1)
-            x0 = np.random.randint(0, w - ew + 1)
-            x_aug[i, :, y0:y0 + eh, x0:x0 + ew] = torch.rand(c, 1, 1)
+    # CutOut / random erasing (~40% of augmented images, vectorized)
+    cut_mask = torch.rand(n_aug) < 0.4
+    n_cut = int(cut_mask.sum())
+    if n_cut > 0:
+        eh = torch.randint(int(h * 0.1), int(h * 0.3) + 1, (n_cut,))
+        ew = torch.randint(int(w * 0.1), int(w * 0.3) + 1, (n_cut,))
+        y0 = (torch.rand(n_cut) * (h - eh.float())).long()
+        x0 = (torch.rand(n_cut) * (w - ew.float())).long()
+        cut_idx = torch.where(cut_mask)[0]
+        for j in range(n_cut):
+            i = cut_idx[j]
+            x_aug[i, :, y0[j]:y0[j]+eh[j], x0[j]:x0[j]+ew[j]] = torch.rand(c, 1, 1)
 
     x[aug_mask] = x_aug.clamp(0.0, 1.0)
     return x
@@ -183,7 +188,7 @@ def calibrate_threshold(model, cal_X, cal_y, max_fpr=MAX_FPR):
     if len(real_probs) == 0:
         return 0.5
 
-    target_fpr = max_fpr * 0.85
+    target_fpr = max_fpr * CAL_MARGIN
     best_thr, best_recall = 0.5, 0.0
     for thr in np.arange(0.05, 0.96, 0.01):
         fpr = (real_probs >= thr).mean()
@@ -239,7 +244,7 @@ def main():
     print(f"Train: {X_tr.shape}  real={int((y_tr == 0).sum())}  "
           f"ai={int((y_tr == 1).sum())}")
 
-    # Train from scratch with heavy augmentation (dropout=0.5)
+    # Train from scratch with heavy augmentation + Dropout(0.5)
     model = build_cnn(K)
     print("Training from scratch with heavy augmentation & dropout=0.5")
 
