@@ -2,7 +2,6 @@ import argparse
 import io
 import json
 import os
-import signal
 import sys
 import time
 from collections import Counter
@@ -18,10 +17,6 @@ CLEANED_PATH = os.path.join(ARTIFACTS_DIR, "cleaned_train.parquet")
 STATS_PATH = os.path.join(ARTIFACTS_DIR, "exploration_stats.json")
 
 TARGET_SIZE = (64, 64)
-
-def timeout_handler(signum, frame):
-    print("[clean.py] Timeout reached – exiting.")
-    sys.exit(0)
 
 def load_data(data_dir):
     frames = []
@@ -133,11 +128,6 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--timeout_seconds", type=int, default=1800)
     args = parser.parse_args()
-
-    # TODO: Delete before submission
-    if hasattr(signal, "SIGALRM"):
-        signal.signal(signal.SIGALRM, timeout_handler)
-        signal.alarm(args.timeout_seconds)
 
     start_time = time.time()
     os.makedirs(ARTIFACTS_DIR, exist_ok=True)

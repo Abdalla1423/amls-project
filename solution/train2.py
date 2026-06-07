@@ -18,6 +18,12 @@ K = 32          # base channel width
 MAX_FPR = 0.20
 SEED = 42
 
+torch.manual_seed(SEED)
+np.random.seed(SEED)
+torch.use_deterministic_algorithms(True)
+torch.set_num_threads(min(8, os.cpu_count() or 1))
+torch.set_num_interop_threads(1)
+
 def load_data_split(split_name):
     path = os.path.join(ARTIFACTS_DIR, f"{split_name}.npz")
     if not os.path.exists(path):

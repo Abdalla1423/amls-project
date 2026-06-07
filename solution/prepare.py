@@ -12,7 +12,6 @@ Usage: python prepare.py --timeout_seconds 600
 import argparse
 import io
 import os
-import signal
 import sys
 import time
 
@@ -25,11 +24,6 @@ DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 ARTIFACTS_DIR = os.path.join(os.path.dirname(__file__), "artifacts")
 
 TARGET_SIZE = (128, 128)
-
-
-def timeout_handler(signum, frame):
-    print("[prepare.py] Timeout – exiting.")
-    sys.exit(0)
 
 
 def load_parquet_dir(directory):
@@ -76,10 +70,6 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--timeout_seconds", type=int, default=600)
     args = parser.parse_args()
-
-    if hasattr(signal, "SIGALRM"):
-        signal.signal(signal.SIGALRM, timeout_handler)
-        signal.alarm(max(1, args.timeout_seconds - 30))
 
     start = time.time()
     os.makedirs(ARTIFACTS_DIR, exist_ok=True)

@@ -9,7 +9,6 @@ Usage: python predict.py --timeout_seconds 600
 import argparse
 import io
 import os
-import signal
 import sys
 import time
 
@@ -31,11 +30,6 @@ BATCH_SIZE = 64
 
 torch.set_num_threads(min(8, os.cpu_count() or 1))
 torch.set_num_interop_threads(1)
-
-
-def timeout_handler(signum, frame):
-    print("[predict.py] Timeout – exiting.")
-    sys.exit(0)
 
 
 def build_cnn(k=K):
@@ -71,10 +65,6 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--timeout_seconds", type=int, default=600)
     args = parser.parse_args()
-
-    if hasattr(signal, "SIGALRM"):
-        signal.signal(signal.SIGALRM, timeout_handler)
-        signal.alarm(max(1, args.timeout_seconds - 30))
 
     t0 = time.time()
     os.makedirs(TASK02_DIR, exist_ok=True)

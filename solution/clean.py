@@ -31,7 +31,6 @@ import argparse
 import io
 import json
 import os
-import signal
 import sys
 import time
 from collections import Counter
@@ -52,11 +51,6 @@ STATS_PATH = os.path.join(ARTIFACTS_DIR, "exploration_stats.json")
 
 # Cleaning parameters
 TARGET_SIZE = (128, 128)
-
-
-def timeout_handler(signum, frame):
-    print("[clean.py] Timeout reached – exiting.")
-    sys.exit(0)
 
 
 def load_parquet_dir(directory):
@@ -173,14 +167,12 @@ def clean(df):
     return df
 
 # average pixel value, down scaled image
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--timeout_seconds", type=int, default=600)
     args = parser.parse_args()
-
-    if hasattr(signal, "SIGALRM"):
-        signal.signal(signal.SIGALRM, timeout_handler)
-        signal.alarm(max(1, args.timeout_seconds - 30))
 
     start = time.time()
     os.makedirs(ARTIFACTS_DIR, exist_ok=True)
