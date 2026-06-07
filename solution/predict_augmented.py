@@ -112,3 +112,78 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+
+def augment_batch(X):
+    """Heavy per-image augmentation for robustness to compression/blur/jitter."""
+    n, c, h, w = X.shape
+
+    # Only augment ~80% of images
+    mask = torch.rand(n) < 0.8
+    aug = X[mask].clone()
+    n_aug = aug.shape[0]
+    if n_aug == 0:
+        return X
+
+    # --- Per-image pixel transforms ---
+
+    # Gaussian noise (sigma 0.05-0.12, 60% of images)
+    m = (torch.rand(n_aug, 1, 1, 1) < 0.6).float()
+    sigma = 0.05 + torch.rand(n_aug, 1, 1, 1) * 0.07
+    aug = aug + torch.randn_like(aug) * sigma * m
+
+    # Brightness shift +/-0.20 (50% of images)
+    m = (torch.rand(n_aug, 1, 1, 1) < 0.5).float()
+    aug = aug + (torch.rand(n_aug, 1, 1, 1) - 0.5) * 0.4 * m
+
+    # Contrast scaling 0.6-1.4 (50% of images)
+    m = (torch.rand(n_aug, 1, 1, 1) < 0.5).float()
+    factor = 0.6 + torch.rand(n_aug, 1, 1, 1) * 0.8
+    mean = aug.mean(dim=(2, 3), keepdim=True)
+    aug = aug + (mean + (aug - mean) * factor - aug) * m
+
+    # Per-channel color shift +/-0.08 (40% of images)
+    m = (torch.rand(n_aug, 1, 1, 1) < 0.4).float()
+    aug = aug + (torch.rand(n_aug, c, 1, 1) - 0.5) * 0.16 * m
+
+    # --- Spatial transforms (batch-level) ---
+
+    # Downscale + upscale (30% chance) — simulates compression
+    if torch.rand(1).item() < 0.3:
+        scale = np.random.choice([0.4, 0.5, 0.6, 0.75])
+        small = (int(h * scale), int(w * scale))
+        aug = F.interpolate(aug, size=small, mode='bilinear', align_corners=False)
+        aug = F.interpolate(aug, size=(h, w), mode='bilinear', align_corners=False)
+
+    # Gaussian blur (30% chance)
+    if torch.rand(1).item() < 0.3:
+        ks = np.random.choice([3, 5])
+        sig = np.random.uniform(0.5, 1.5)
+        ax = torch.arange(ks, dtype=torch.float32) - ks // 2
+        k1d = torch.exp(-ax**2 / (2 * sig**2))
+        k1d = k1d / k1d.sum()
+        k2d = (k1d[:, None] @ k1d[None, :]).expand(c, 1, ks, ks)
+        pad = ks // 2
+        aug = F.conv2d(F.pad(aug, [pad]*4, mode='reflect'), k2d, groups=c)
+
+    # Horizontal flip (per-image, 50%)
+    flip = torch.rand(n_aug) < 0.5
+    aug[flip] = aug[flip].flip(-1)
+
+    # Cutout / random erasing (40% of images)
+    cut = torch.rand(n_aug) < 0.4
+    n_cut = int(cut.sum())
+    if n_cut > 0:
+        eh = torch.randint(int(h*0.1), int(h*0.3)+1, (n_cut,))
+        ew = torch.randint(int(w*0.1), int(w*0.3)+1, (n_cut,))
+        y0 = (torch.rand(n_cut) * (h - eh.float())).long()
+        x0 = (torch.rand(n_cut) * (w - ew.float())).long()
+        idx = torch.where(cut)[0]
+        for j in range(n_cut):
+            i = idx[j]
+            aug[i, :, y0[j]:y0[j]+eh[j], x0[j]:x0[j]+ew[j]] = torch.rand(c, 1, 1)
+
+    X[mask] = aug.clamp(0.0, 1.0)
+    return X
