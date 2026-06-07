@@ -25,7 +25,6 @@ from sklearn.metrics import confusion_matrix
 # Paths & hyper-parameters
 # ---------------------------------------------------------------------------
 ARTIFACTS_DIR = os.path.join(os.path.dirname(__file__), "artifacts")
-TASK02_DIR = os.path.join(ARTIFACTS_DIR, "task02")
 
 BATCH_SIZE = 64
 LR = 5e-4
@@ -144,7 +143,6 @@ def main():
 
     t0 = time.time()
     deadline = t0 + args.timeout_seconds - 120  # stop 120s before timeout
-    os.makedirs(TASK02_DIR, exist_ok=True)
 
     # Load data
     train_data = load_split("train")
