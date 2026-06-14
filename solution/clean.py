@@ -5,7 +5,7 @@ Usage: python clean.py --timeout_seconds 600
 
 import argparse
 import os
-import sys
+import time
 import pandas as pd
 from PIL import Image
 import io
@@ -19,51 +19,75 @@ DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 ARTIFACTS_DIR = os.path.join(os.path.dirname(__file__), "artifacts")
 TRAIN_DIR = os.path.join(DATA_DIR, "train")
 
+LOG_FILE = os.path.join(ARTIFACTS_DIR, "task01/data_exploration_and_cleaning.txt")
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--timeout_seconds", type=int, default=600)
-    args = parser.parse_args()
+TIME_OUT = 600
 
-    os.makedirs(ARTIFACTS_DIR, exist_ok=True)
+# Clean data by removing duplicates, and correcting labels, then save to a single parquet file for training
+def clean_data(files, save_path, timeout_seconds):
+    start_time = time.time()
 
-    clean_data([os.path.join(TRAIN_DIR, f) for f in os.listdir(TRAIN_DIR)], os.path.join(ARTIFACTS_DIR, "task01/training_dataset.parquet"))
+    class_shapes = defaultdict(list)
+    class_formats = defaultdict(list)
+    class_sizes = defaultdict(list)
 
-
-def clean_data(files, save_path):
-    def process_image(image_bytes, size=(224,224)):
+    def process_image(image_bytes):
         img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-
-        # Hash before resize
         img_hash = imagehash.dhash(img)
-
-        # Resize
-        img = img.resize(size, Image.Resampling.LANCZOS)
-
-        buffer = io.BytesIO()
-        img.save(buffer, format="JPEG")
-
-        return img_hash, buffer.getvalue()
+        return img_hash, img
 
     writer = None
     seen_hashes = set()
+    timeout_triggered = False
+
+    total_seen = 0
+    total_saved = 0
+    total_duplicates = 0
 
     for f in files:
+        print(f"Cleaning file {f}")
+        if timeout_triggered:
+            break
         df = pd.read_parquet(f)
+
+        file_seen = 0
+        file_saved = 0
+        file_duplicates = 0
 
         processed_rows = []
 
         for row in df.itertuples(index=False):
-            img_hash, resized_img = process_image(row.image)
+            if time.time() - start_time > timeout_seconds:
+                print(f"\n[Timeout] Reached execution limit of {timeout_seconds} seconds.")
+                timeout_triggered = True
+                break
+
+            total_seen += 1
+            file_seen += 1
+
+            label = row.source_class
+            raw_bytes = row.image
+
+            img_hash, img = process_image(raw_bytes)
 
             if img_hash in seen_hashes:
+                total_duplicates += 1
+                file_duplicates += 1
                 continue
 
             seen_hashes.add(img_hash)
 
-            row_dict = row._asdict()
-            row_dict["image"] = resized_img
-            processed_rows.append(row_dict)
+            class_shapes[label].append(img.size)  # (width, height)
+            class_formats[label].append(img.mode)
+            class_sizes[label].append(len(raw_bytes))
+
+            processed_rows.append(({
+                "image": raw_bytes,
+                "source_class": label,
+                }))
+
+            total_saved += 1
+            file_saved += 1
 
         if processed_rows:
             df_filtered = pd.DataFrame(processed_rows)
@@ -73,10 +97,56 @@ def clean_data(files, save_path):
                 writer = pq.ParquetWriter(save_path, table.schema)
 
             writer.write_table(table)
+        print(
+            f"File summary -> "
+            f"Seen: {file_seen:,}, "
+            f"Saved: {file_saved:,}, "
+            f"Duplicates removed: {file_duplicates:,}"
+        )
 
     if writer:
         writer.close()
 
+    class_0_sizes = class_sizes.get(0, [])
+
+    class_0_count = len(class_0_sizes)
+    class_0_average = (sum(class_0_sizes) / class_0_count / 1024) 
+
+    class_1_sizes = []
+    for label, sizes in class_sizes.items():
+        if int(label) > 0:
+            class_1_sizes.extend(sizes)
+    class_1_count = len(class_1_sizes)
+    class_1_average = (sum(class_1_sizes) / class_1_count / 1024)
+
+    total = class_0_count + class_1_count
+
+    with open(LOG_FILE, mode="w") as file:
+        file.write("\n=== FINAL SUMMARY ===\n")
+        file.write(f"Total samples processed: {total_seen:,}\n")
+        file.write(f"Total samples saved:     {total_saved:,}\n")
+        file.write(f"Total duplicates:       {total_duplicates:,}\n")
+
+        file.write("\n=== TARGET BINARY CLASS DISTRIBUTION ===\n")
+        file.write(f"Class 0 (REAL) - Count: {class_0_count} ({class_0_count/total * 100:.1f}%) | Average Size: {class_0_average:.2f} KB\n")
+        file.write(f"Class 1 (AI) - Count: {class_1_count} ({class_1_count/total * 100:.1f}%)| Average Size: {class_1_average:.2f} KB\n")
+
+        file.write("\n=== CLASS DETAIL & PROPERTY ANALYSIS ===\n")
+        CLASSES = sorted(class_shapes.keys())
+        for label in CLASSES:
+            widths = [s[0] for s in class_shapes[label]]
+            heights = [s[1] for s in class_shapes[label]]
+            sizes = class_sizes[label]
+            count = len(widths)
+
+            file.write(f"\nClass {label}\n")
+            file.write(f"   Count: {len(widths):,}\n")
+            file.write(f"   Avg Size: {sum(sizes)/count/1024:.2f} KB\n")
+            file.write(f"   Avg Width: {sum(widths)/count:.2f}\n")
+            file.write(f"   Avg Height: {sum(heights)/count:.2f}\n")
+            file.write(f"   Formats: {dict(Counter(class_formats[label]))}\n")
+
+# Additional function for data exploration 
 def explore_data(path):
     files = os.listdir(path)
     class_shapes = defaultdict(list)
@@ -139,7 +209,7 @@ def explore_data(path):
         print(f"Avg Height: {sum(heights)/len(heights):.2f}")
         print(f"Formats: {Counter(class_formats[label])}")
 
-
+# Additional function to plot random samples from the dataset, for visual inspection of image quality and label correctness
 def plot_random_images(path):
     fig, axes = plt.subplots(3, 3, figsize=(10,10))
 
@@ -155,6 +225,7 @@ def plot_random_images(path):
     plt.tight_layout()
     plt.show()
 
+# Additional function to detect duplicate images using perceptual hashing, and visualize some examples of duplicates side by side
 def detect_duplicates(path, files):
     hash_map = {}
     for f in files:
@@ -197,11 +268,26 @@ def detect_duplicates(path, files):
 
     plt.show()
 
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout_seconds", type=int, default=TIME_OUT)
+    args = parser.parse_args()
+
+    start_time = time.time()
+
+    os.makedirs(ARTIFACTS_DIR, exist_ok=True)
+
+    CLEANED_DIR = os.path.join(ARTIFACTS_DIR, "task01/training_dataset.parquet")
+    os.makedirs(os.path.dirname(CLEANED_DIR), exist_ok=True)
+
+    clean_data([os.path.join(TRAIN_DIR, f) for f in os.listdir(TRAIN_DIR)], CLEANED_DIR, timeout_seconds=args.timeout_seconds)
+    
+    print(f"\n [clean.py] Total time invested in cleaning: {time.time() - start_time}")
+
+
 if __name__ == "__main__":
     main()
 
     # plot_random_images(os.path.join(ARTIFACTS_DIR, "task01/training_dataset.parquet"))
-
     # explore_data(TRAIN_DIR)
-
     # detect_duplicates(TRAIN_DIR, os.listdir(TRAIN_DIR))
