@@ -8,6 +8,7 @@ import os
 import sys
 import time
 import psutil
+import matplotlib.pyplot as plt
 
 import numpy as np
 from sklearn.metrics import confusion_matrix
@@ -23,7 +24,8 @@ SEED = 42
 
 BATCH_SIZE = 64
 NUM_EPOCHS = 50
-LR = 5e-4
+LR = 5e-3
+WD = 1e-2
 MAX_FPR = 0.20
 DEVICE = "cpu"
 
@@ -81,17 +83,17 @@ def init_weights(m):
         torch.nn.init.zeros_(m.bias)
 
 # Initialize CNN model and optimizer for deep learning prediction
-def initialize_model_and_optimizer(num_epochs=NUM_EPOCHS):
+def initialize_model_and_optimizer(lr, wd):
     model = Given_CNN()
     model.to(DEVICE)
-    #model.apply(init_weights)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=1e-2)
-    scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs)
+    model.apply(init_weights)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
+    scheduler = CosineAnnealingLR(optimizer, T_max=20)
     return model, optimizer, scheduler
 
 # Initialize loss function for training
 def initialize_loss_function(weights):
-    return torch.nn.CrossEntropyLoss(weight=weights, label_smoothing=0.02)
+    return torch.nn.CrossEntropyLoss(weight=weights, label_smoothing=0.1)
 
 # Calibrate decision threshold on calibration data to achieve FPR <= 20% while maximizing recall on AI samples
 def calibrate_threshold(model, cal_loader, max_fpr=MAX_FPR):
@@ -104,7 +106,7 @@ def calibrate_threshold(model, cal_loader, max_fpr=MAX_FPR):
 
     target_fpr = max_fpr * 0.85  # safety margin
     best_thr, best_recall = 0.5, 0.0
-    for thr in np.arange(0.05, 0.96, 0.01):
+    for thr in np.arange(0.05, 0.96, 0.001):
         fpr = (real_probs >= thr).mean()
         recall = (ai_probs >= thr).mean() if len(ai_probs) > 0 else 0.0
         if fpr <= target_fpr and recall > best_recall:
@@ -151,8 +153,51 @@ def train_one_epoch(model, optimizer, loss_fn, train_loader, device):
   avg_loss = sum(losses) / len(losses)
   return avg_loss
 
+# Hyperparameter tune learning rate and weight decay
+def hyperparameter_tune(lrs, wds):
+    rows = []
+    for lr in lrs:
+        cols = []
+        for wd in wds:
+            print(f"Learning rate: {lr}, and Weight Decay: {wd}")
+            recall = main(lr=lr, wd=wd)
+            cols.append(recall)
+        rows.append(cols)
+    
+    plt.figure(figsize=(8, 6))
+    im = plt.imshow(recall, aspect='auto')
+
+    for i in range(recall.shape[0]):
+        for j in range(recall.shape[1]):
+            plt.text(
+                j,
+                i,
+                f"{recall[i, j]:.4f}",
+                ha="center",
+                va="center"
+            )
+
+    plt.colorbar(im, label="Best Recall_AI")
+
+    plt.xticks(
+        range(len(wds)),
+        [str(wd) for wd in wds]
+    )
+
+    plt.yticks(
+        range(len(lrs)),
+        [str(lr) for lr in lrs]
+    )
+
+    plt.xlabel("Weight Decay")
+    plt.ylabel("Learning Rate")
+    plt.title("Grid Search Results (Best Recall_AI)")
+
+    plt.tight_layout()
+    plt.show()
+
 # Deep learning prediction with a simple CNN classifier
-def main():
+def main(lr=LR, wd=WD):
     parser = argparse.ArgumentParser()
     parser.add_argument("--timeout_seconds", type=int, default=TIME_OUT)
     args = parser.parse_args()
@@ -184,7 +229,7 @@ def main():
     print(f"Train: {X_tr.shape}  real={int((y_tr == 0).sum())}  ai={int((y_tr == 1).sum())}")
 
     # 2.1. Build model, optimizer
-    model, optimizer, scheduler = initialize_model_and_optimizer()
+    model, optimizer, scheduler = initialize_model_and_optimizer(lr, wd)
 
     # 2.2. Compute class weights for imbalanced training data and initialize loss function
     n_real = int((y_tr == 0).sum())
@@ -237,6 +282,8 @@ def main():
     with open(LOG_FILE, mode="a") as file:
         file.write(f"\n[train.py] Done in {time.time() - start_time:.1f}s\n")
         file.write(f"Best recall_ai={best_recall:.2f} at threshold={best_thr:.2f}\n")
+    
+    return best_recall
 
 
 if __name__ == "__main__":
