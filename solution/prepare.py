@@ -145,11 +145,11 @@ def main():
     set_random_seeds()
 
     datasets = [
-        (os.path.join(ARTIFACTS_DIR, "task01"), os.path.join(ARTIFACTS_DIR, "task02/prepared_training_data"), False),
-        (os.path.join(DATA_DIR, "calibration"), os.path.join(ARTIFACTS_DIR, "task02/prepared_calibration_data"), False),
-        (os.path.join(DATA_DIR, "validation"), os.path.join(ARTIFACTS_DIR, "task02/prepared_validation_data"), False),
-        (os.path.join(DATA_DIR, "calibration_augmented"), os.path.join(ARTIFACTS_DIR, "task03/prepared_calibration_augmented_data"), False),
-        (os.path.join(DATA_DIR, "validation_augmented"), os.path.join(ARTIFACTS_DIR, "task03/prepared_validation_augmented_data"), False)
+        (os.path.join(ARTIFACTS_DIR, "task01"), os.path.join(ARTIFACTS_DIR, "task02/training_data"), False),
+        (os.path.join(DATA_DIR, "calibration"), os.path.join(ARTIFACTS_DIR, "task02/calibration_data"), False),
+        (os.path.join(DATA_DIR, "validation"), os.path.join(ARTIFACTS_DIR, "task02/validation_data"), False),
+        (os.path.join(DATA_DIR, "calibration_augmented"), os.path.join(ARTIFACTS_DIR, "task03/calibration_augmented_data"), False),
+        (os.path.join(DATA_DIR, "validation_augmented"), os.path.join(ARTIFACTS_DIR, "task03/validation_augmented_data"), False)
     ]
 
     for input_dir, output_p, with_balancing in datasets:
@@ -159,7 +159,7 @@ def main():
 
         process_and_save_npy(input_dir, output_p, balancing=with_balancing)
 
-    print(f"\n [prepare.py] Total time invested in preparation: {time.time() - start_time:.2f} seconds.")
+    print(f"\n[prepare.py] Done in {time.time() - start_time:.1f}s\n")
 
 if __name__ == "__main__":
     main()

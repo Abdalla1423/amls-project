@@ -15,9 +15,8 @@ from sklearn.metrics import confusion_matrix
 
 import torch
 from torch.optim.lr_scheduler import CosineAnnealingLR
-from torch.utils.data import DataLoader
-
-from model import ImageDataset, Given_CNN
+from torch.utils.data import DataLoader, Dataset
+import torch.nn as nn
 
 TIME_OUT = 1800
 SEED = 42
@@ -35,8 +34,69 @@ IN_CHANNELS = 3
 ARTIFACTS_DIR = os.path.join(os.path.dirname(__file__), "artifacts")
 
 TASK02_DIR = os.path.join(ARTIFACTS_DIR, "task02")
+
 LOG_FILE = os.path.join(TASK02_DIR, "training_log.txt")
 CHECKPOINT_PATH = os.path.join(TASK02_DIR, "best_model.pth")
+
+# Custom Dataset class to load images and labels from our cleaned parquet file
+class ImageDataset(Dataset):
+    def __init__(self, images, labels):
+        self.images = images
+        self.labels = labels
+
+    def __len__(self):
+        return len(self.labels)
+
+    def __getitem__(self, idx):
+        img = torch.from_numpy(np.array(self.images[idx])).float()
+        return img, torch.tensor(self.labels[idx]).long()
+    
+# Provided CNN model
+class Given_CNN(nn.Module):
+    def __init__(self, in_channels=IN_CHANNELS, num_classes=2, k=K):
+        super(Given_CNN, self).__init__()
+
+        # Block 1:
+        self.conv1 = nn.Conv2d(in_channels=in_channels, out_channels=k, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bnorm1 = nn.BatchNorm2d(k)
+        self.pool1 = nn.MaxPool2d(2)
+
+        self.block1 = nn.Sequential(self.conv1, self.bnorm1, nn.ReLU(), self.pool1)
+
+        # Block 2:
+        self.conv2 = nn.Conv2d(in_channels=k, out_channels=2*k, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bnorm2 = nn.BatchNorm2d(2*k)
+        self.pool2 = nn.MaxPool2d(2)
+
+        self.block2 = nn.Sequential(self.conv2, self.bnorm2, nn.ReLU(), self.pool2)
+
+        # Block 3:
+        self.conv3 = nn.Conv2d(in_channels=2*k, out_channels=4*k, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bnorm3 = nn.BatchNorm2d(4*k)
+        self.pool3 = nn.MaxPool2d(2)
+
+        # Block 4:
+        self.conv4 = nn.Conv2d(in_channels=4*k, out_channels=4*k, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bnorm4 = nn.BatchNorm2d(4*k)
+        self.global_pool = nn.AdaptiveAvgPool2d(1)
+
+        self.block3 = nn.Sequential(self.conv3, self.bnorm3, nn.ReLU(),
+                                    self.conv4, self.bnorm4, nn.ReLU(),
+                                    self.global_pool)
+
+        # Classifier:
+        self.classifier = nn.Sequential(
+            nn.Flatten(),
+            nn.Dropout(p=0.3),
+            nn.Linear(4*k, num_classes)
+        )
+
+    def forward(self, x):
+        x = self.block1(x)
+        x = self.block2(x)
+        x = self.block3(x)
+        x = self.classifier(x)
+        return x
 
 def print_ram_usage(msg=""):
     process = psutil.Process(os.getpid())
@@ -215,14 +275,14 @@ def main(lr=LR, wd=WD):
 
     print_ram_usage("Start")
 
-    train_data = load_data_split("task02/prepared_training_data")
-    cal_data = load_data_split("task02/prepared_calibration_data")
-    val_data = load_data_split("task02/prepared_validation_data")
+    train_data = load_data_split("task02/training_data")
+    cal_data = load_data_split("task02/calibration_data")
+    val_data = load_data_split("task02/validation_data")
     
     print_ram_usage("After loading")
 
     if train_data is None:
-        print("ERROR: train.npz not found. Run prepare.py first.")
+        print("ERROR: train.npy not found. Run prepare.py first.")
         sys.exit(1)
 
     X_tr, y_tr = train_data

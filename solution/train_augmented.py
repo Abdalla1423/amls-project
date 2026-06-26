@@ -7,30 +7,29 @@ import argparse
 import os
 import sys
 import time
-import random
 import psutil
 
 import numpy as np
-from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.metrics import confusion_matrix
 
 import torch
-import torchvision.transforms as T
-from torch.utils.data import Dataset
 from torch.optim.lr_scheduler import CosineAnnealingLR
-from torch.utils.data import DataLoader
-
-from model import Given_CNN, AugmentedImageDataset
+from torch.utils.data import DataLoader, Dataset
+import torch.nn as nn
+import torchvision.transforms as T
 
 TIME_OUT = 1800
 SEED = 42
 
 BATCH_SIZE = 64
 NUM_EPOCHS = 50
-LR = 5e-4
-K = 16
+LR = 5e-3
+WD = 1e-2
 MAX_FPR = 0.20
 DEVICE = "cpu"
 
+K = 16
+IN_CHANNELS = 3
 
 ARTIFACTS_DIR = os.path.join(os.path.dirname(__file__), "artifacts")
 
@@ -41,6 +40,103 @@ LOG_FILE = os.path.join(TASK03_DIR, "augmented_training_log.txt")
 FINETUNE_CHECKPOINT_PATH = os.path.join(TASK02_DIR, "best_model.pt")
 CHECKPOINT_PATH = os.path.join(TASK03_DIR, "best_model.pt")
 
+# Custom Dataset class to load images and labels from our cleaned parquet file, with data augmentation for training
+class AddGaussianNoise(object):
+    def __init__(self, mean=0.0, std_max=0.02):
+        self.mean = mean
+        self.std_max = std_max
+
+    def __call__(self, tensor):
+        std = random.uniform(0.0, self.std_max)
+        if std == 0:
+            return tensor
+        return tensor + torch.randn(tensor.size()) * std + self.mean
+    
+# Custom Dataset class to load images and labels from our cleaned parquet file, also augment training dataset
+class AugmentedImageDataset(Dataset):
+    def __init__(self, images, labels, is_training):
+        self.images = images
+        self.labels = labels
+        self.is_training = is_training
+
+        self.mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
+        self.std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
+        
+        self.normalize = T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+
+        self.train_transforms = T.Compose([
+            T.RandomHorizontalFlip(p=0.5),
+            T.RandomVerticalFlip(p=0.5),
+            T.RandomApply([
+                T.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.05, hue=0.02)
+            ], p=0.5),
+            T.RandomApply([T.GaussianBlur(kernel_size=3, sigma=(0.1, 0.5))], p=0.1),
+            T.RandomApply([AddGaussianNoise(mean=0.0, std_max=0.015)], p=0.1),
+        ])
+
+    def __len__(self):
+        return len(self.labels)
+
+    def __getitem__(self, idx):
+        img = torch.from_numpy(np.array(self.images[idx])).float()
+
+        # Apply augmentations
+        if self.is_training:
+            img = (img * self.std) + self.mean
+            img = torch.clamp(img, 0.0, 1.0)
+
+            img = self.train_transforms(img)
+            img = torch.clamp(img, 0.0, 1.0)
+            
+        img = self.normalize(img)
+        return img, torch.tensor(self.labels[idx]).long()
+    
+# Provided CNN model
+class Given_CNN(nn.Module):
+    def __init__(self, in_channels=IN_CHANNELS, num_classes=2, k=K):
+        super(Given_CNN, self).__init__()
+
+        # Block 1:
+        self.conv1 = nn.Conv2d(in_channels=in_channels, out_channels=k, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bnorm1 = nn.BatchNorm2d(k)
+        self.pool1 = nn.MaxPool2d(2)
+
+        self.block1 = nn.Sequential(self.conv1, self.bnorm1, nn.ReLU(), self.pool1)
+
+        # Block 2:
+        self.conv2 = nn.Conv2d(in_channels=k, out_channels=2*k, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bnorm2 = nn.BatchNorm2d(2*k)
+        self.pool2 = nn.MaxPool2d(2)
+
+        self.block2 = nn.Sequential(self.conv2, self.bnorm2, nn.ReLU(), self.pool2)
+
+        # Block 3:
+        self.conv3 = nn.Conv2d(in_channels=2*k, out_channels=4*k, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bnorm3 = nn.BatchNorm2d(4*k)
+        self.pool3 = nn.MaxPool2d(2)
+
+        # Block 4:
+        self.conv4 = nn.Conv2d(in_channels=4*k, out_channels=4*k, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bnorm4 = nn.BatchNorm2d(4*k)
+        self.global_pool = nn.AdaptiveAvgPool2d(1)
+
+        self.block3 = nn.Sequential(self.conv3, self.bnorm3, nn.ReLU(),
+                                    self.conv4, self.bnorm4, nn.ReLU(),
+                                    self.global_pool)
+
+        # Classifier:
+        self.classifier = nn.Sequential(
+            nn.Flatten(),
+            nn.Dropout(p=0.3),
+            nn.Linear(4*k, num_classes)
+        )
+
+    def forward(self, x):
+        x = self.block1(x)
+        x = self.block2(x)
+        x = self.block3(x)
+        x = self.classifier(x)
+        return x
 
 def load_model():
     ckpt = torch.load(FINETUNE_CHECKPOINT_PATH, map_location="cpu", weights_only=False)
@@ -99,14 +195,15 @@ def initialize_model_and_optimizer(finetune, num_epochs=NUM_EPOCHS):
     else:
         model = Given_CNN()
         model.to(DEVICE)
-    # model.apply(init_weights)
+        model.apply(init_weights)
+        
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=1e-2)
     scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs)
     return model, optimizer, scheduler
 
 # Initialize loss function for training
 def initialize_loss_function(weights):
-    return torch.nn.CrossEntropyLoss(weight=weights, label_smoothing=0.02)
+    return torch.nn.CrossEntropyLoss(weight=weights, label_smoothing=0.1)
 
 # Calibrate decision threshold on calibration data to achieve FPR <= 20% while maximizing recall on AI samples
 def calibrate_threshold(model, cal_loader, max_fpr=MAX_FPR):
@@ -184,9 +281,9 @@ def main():
 
     print_ram_usage("Start")
 
-    train_data = load_data_split("task02/prepared_training_data")
-    cal_data = load_data_split("task03/prepared_calibration_augmented_data")
-    val_data = load_data_split("task03/prepared_validation_augmented_data")
+    train_data = load_data_split("task02/training_data")
+    cal_data = load_data_split("task03/calibration_augmented_data")
+    val_data = load_data_split("task03/validation_augmented_data")
     
     print_ram_usage("After loading")
 
@@ -244,7 +341,7 @@ def main():
         print_ram_usage(f"After epoch {epoch+1}")
 
     with open(LOG_FILE, mode="a") as file:
-        file.write(f"\n[train.py] Done in {time.time() - start_time:.1f}s\n")
+        file.write(f"\n[train_augmented.py] Done in {time.time() - start_time:.1f}s\n")
         file.write(f"Best recall_ai={best_recall:.2f} at threshold={best_thr:.2f}\n")
 
 

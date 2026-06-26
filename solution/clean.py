@@ -282,7 +282,7 @@ def main():
 
     clean_data([os.path.join(TRAIN_DIR, f) for f in os.listdir(TRAIN_DIR)], CLEANED_DIR, timeout_seconds=args.timeout_seconds)
     
-    print(f"\n [clean.py] Total time invested in cleaning: {time.time() - start_time}")
+    print(f"\n[clean.py] Done in {time.time() - start_time:.1f}s\n")
 
 
 if __name__ == "__main__":
