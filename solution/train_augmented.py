@@ -121,7 +121,7 @@ class Given_CNN(nn.Module):
         self.bnorm4 = nn.BatchNorm2d(4*k)
         self.global_pool = nn.AdaptiveAvgPool2d(1)
 
-        self.block3 = nn.Sequential(self.conv3, self.bnorm3, nn.ReLU(),
+        self.block3 = nn.Sequential(self.conv3, self.bnorm3, nn.ReLU(), self.pool3,
                                     self.conv4, self.bnorm4, nn.ReLU(),
                                     self.global_pool)
 
@@ -305,8 +305,8 @@ def main():
     loss_fn = initialize_loss_function(weights)
 
     train_loader = make_loader(X_tr, y_tr, batch_size=BATCH_SIZE)
-    cal_loader = make_loader(cal_data[0], cal_data[1], batch_size=BATCH_SIZE)
-    val_loader = make_loader(val_data[0], val_data[1], batch_size=BATCH_SIZE)
+    cal_loader = make_loader(cal_data[0], cal_data[1], batch_size=BATCH_SIZE, shuffle=False)
+    val_loader = make_loader(val_data[0], val_data[1], batch_size=BATCH_SIZE, shuffle=False)
 
     best_recall, best_thr = 0.0, 0.5
 

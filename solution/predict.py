@@ -83,7 +83,7 @@ class Given_CNN(nn.Module):
         self.bnorm4 = nn.BatchNorm2d(4*k)
         self.global_pool = nn.AdaptiveAvgPool2d(1)
 
-        self.block3 = nn.Sequential(self.conv3, self.bnorm3, nn.ReLU(),
+        self.block3 = nn.Sequential(self.conv3, self.bnorm3, nn.ReLU(), self.pool3,
                                     self.conv4, self.bnorm4, nn.ReLU(),
                                     self.global_pool)
 
@@ -219,7 +219,7 @@ def main():
     # 2. Load predict data from PREDICT_DIR (parquet with columns: row_id, image)
     print("\n=== Loading data ===")
     X, y = process_parquet(PREDICT_DIR)
-    data_loader = make_loader(X, y)
+    data_loader = make_loader(X, y, batch_size=BATCH_SIZE)
 
     print_ram_usage("After loading")
 

@@ -82,7 +82,7 @@ class Given_CNN(nn.Module):
         self.bnorm4 = nn.BatchNorm2d(4*k)
         self.global_pool = nn.AdaptiveAvgPool2d(1)
 
-        self.block3 = nn.Sequential(self.conv3, self.bnorm3, nn.ReLU(),
+        self.block3 = nn.Sequential(self.conv3, self.bnorm3, nn.ReLU(), self.pool3,
                                     self.conv4, self.bnorm4, nn.ReLU(),
                                     self.global_pool)
 
