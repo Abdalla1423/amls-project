@@ -23,8 +23,8 @@ SEED = 42
 
 BATCH_SIZE = 64
 NUM_EPOCHS = 50
-LR = 5e-3
-WD = 1e-2
+LR = 0.005
+WD = 0.0001
 MAX_FPR = 0.20
 DEVICE = "cpu"
 
@@ -347,5 +347,5 @@ def main(lr=LR, wd=WD):
 
 
 if __name__ == "__main__":
-    #main()
+    main()
     #hyperparameter_tune(lrs=[0.0005, 0.001, 0.005], wds=[0.0001, 0.001, 0.01])
