@@ -15,6 +15,7 @@ import imagehash
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+# Paths and global variables
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 ARTIFACTS_DIR = os.path.join(os.path.dirname(__file__), "artifacts")
 TRAIN_DIR = os.path.join(DATA_DIR, "train")
@@ -22,6 +23,47 @@ TRAIN_DIR = os.path.join(DATA_DIR, "train")
 LOG_FILE = os.path.join(ARTIFACTS_DIR, "task01/data_exploration_and_cleaning.txt")
 
 TIME_OUT = 600
+
+# Log gathered information to artifacts/task01/data_exploration_and_cleaning.txt
+def write_log(total_seen, total_saved, total_duplicates, class_sizes, class_shapes, class_formats):
+    class_0_sizes = class_sizes.get(0, [])
+
+    class_0_count = len(class_0_sizes)
+    class_0_average = (sum(class_0_sizes) / class_0_count / 1024) 
+
+    class_1_sizes = []
+    for label, sizes in class_sizes.items():
+        if int(label) > 0:
+            class_1_sizes.extend(sizes)
+    class_1_count = len(class_1_sizes)
+    class_1_average = (sum(class_1_sizes) / class_1_count / 1024)
+
+    total = class_0_count + class_1_count
+
+    with open(LOG_FILE, mode="w") as file:
+        file.write("\n=== FINAL SUMMARY ===\n")
+        file.write(f"Total samples processed: {total_seen:,}\n")
+        file.write(f"Total samples saved:     {total_saved:,}\n")
+        file.write(f"Total duplicates:       {total_duplicates:,}\n")
+
+        file.write("\n=== TARGET BINARY CLASS DISTRIBUTION ===\n")
+        file.write(f"Class 0 (REAL) - Count: {class_0_count} ({class_0_count/total * 100:.1f}%) | Average Size: {class_0_average:.2f} KB\n")
+        file.write(f"Class 1 (AI) - Count: {class_1_count} ({class_1_count/total * 100:.1f}%)| Average Size: {class_1_average:.2f} KB\n")
+
+        file.write("\n=== CLASS DETAIL & PROPERTY ANALYSIS ===\n")
+        CLASSES = sorted(class_shapes.keys())
+        for label in CLASSES:
+            widths = [s[0] for s in class_shapes[label]]
+            heights = [s[1] for s in class_shapes[label]]
+            sizes = class_sizes[label]
+            count = len(widths)
+
+            file.write(f"\nClass {label}\n")
+            file.write(f"   Count: {len(widths):,}\n")
+            file.write(f"   Avg Size: {sum(sizes)/count/1024:.2f} KB\n")
+            file.write(f"   Avg Width: {sum(widths)/count:.2f}\n")
+            file.write(f"   Avg Height: {sum(heights)/count:.2f}\n")
+            file.write(f"   Formats: {dict(Counter(class_formats[label]))}\n")
 
 # Clean data by removing duplicates, and correcting labels, then save to a single parquet file for training
 def clean_data(files, save_path, timeout_seconds):
@@ -107,44 +149,29 @@ def clean_data(files, save_path, timeout_seconds):
     if writer:
         writer.close()
 
-    class_0_sizes = class_sizes.get(0, [])
+    write_log(total_seen, total_saved, total_duplicates, class_sizes, class_shapes, class_formats)
 
-    class_0_count = len(class_0_sizes)
-    class_0_average = (sum(class_0_sizes) / class_0_count / 1024) 
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout_seconds", type=int, default=TIME_OUT)
+    args = parser.parse_args()
 
-    class_1_sizes = []
-    for label, sizes in class_sizes.items():
-        if int(label) > 0:
-            class_1_sizes.extend(sizes)
-    class_1_count = len(class_1_sizes)
-    class_1_average = (sum(class_1_sizes) / class_1_count / 1024)
+    start_time = time.time()
 
-    total = class_0_count + class_1_count
+    os.makedirs(ARTIFACTS_DIR, exist_ok=True)
+    os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
 
-    with open(LOG_FILE, mode="w") as file:
-        file.write("\n=== FINAL SUMMARY ===\n")
-        file.write(f"Total samples processed: {total_seen:,}\n")
-        file.write(f"Total samples saved:     {total_saved:,}\n")
-        file.write(f"Total duplicates:       {total_duplicates:,}\n")
+    CLEANED_DIR = os.path.join(ARTIFACTS_DIR, "task01/training_dataset.parquet")
+    os.makedirs(os.path.dirname(CLEANED_DIR), exist_ok=True)
 
-        file.write("\n=== TARGET BINARY CLASS DISTRIBUTION ===\n")
-        file.write(f"Class 0 (REAL) - Count: {class_0_count} ({class_0_count/total * 100:.1f}%) | Average Size: {class_0_average:.2f} KB\n")
-        file.write(f"Class 1 (AI) - Count: {class_1_count} ({class_1_count/total * 100:.1f}%)| Average Size: {class_1_average:.2f} KB\n")
+    files = sorted(os.listdir(TRAIN_DIR))
+    clean_data([os.path.join(TRAIN_DIR, f) for f in files], CLEANED_DIR, timeout_seconds=args.timeout_seconds)
+    
+    print(f"\n[clean.py] Done in {time.time() - start_time:.1f}s\n")
 
-        file.write("\n=== CLASS DETAIL & PROPERTY ANALYSIS ===\n")
-        CLASSES = sorted(class_shapes.keys())
-        for label in CLASSES:
-            widths = [s[0] for s in class_shapes[label]]
-            heights = [s[1] for s in class_shapes[label]]
-            sizes = class_sizes[label]
-            count = len(widths)
 
-            file.write(f"\nClass {label}\n")
-            file.write(f"   Count: {len(widths):,}\n")
-            file.write(f"   Avg Size: {sum(sizes)/count/1024:.2f} KB\n")
-            file.write(f"   Avg Width: {sum(widths)/count:.2f}\n")
-            file.write(f"   Avg Height: {sum(heights)/count:.2f}\n")
-            file.write(f"   Formats: {dict(Counter(class_formats[label]))}\n")
+if __name__ == "__main__":
+    main()
 
 # Additional function for data exploration 
 def explore_data(path):
@@ -267,27 +294,3 @@ def detect_duplicates(path, files):
         axes[i, 1].axis('off')
 
     plt.show()
-
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--timeout_seconds", type=int, default=TIME_OUT)
-    args = parser.parse_args()
-
-    start_time = time.time()
-
-    os.makedirs(ARTIFACTS_DIR, exist_ok=True)
-
-    CLEANED_DIR = os.path.join(ARTIFACTS_DIR, "task01/training_dataset.parquet")
-    os.makedirs(os.path.dirname(CLEANED_DIR), exist_ok=True)
-
-    clean_data([os.path.join(TRAIN_DIR, f) for f in os.listdir(TRAIN_DIR)], CLEANED_DIR, timeout_seconds=args.timeout_seconds)
-    
-    print(f"\n[clean.py] Done in {time.time() - start_time:.1f}s\n")
-
-
-if __name__ == "__main__":
-    main()
-
-    # plot_random_images(os.path.join(ARTIFACTS_DIR, "task01/training_dataset.parquet"))
-    # explore_data(TRAIN_DIR)
-    # detect_duplicates(TRAIN_DIR, os.listdir(TRAIN_DIR))

@@ -1,7 +1,5 @@
 """prepare.py - Data preparation for training.
 
-Note: Do NOT prepare data from data/predict/ (it may change after training).
-
 Usage: python prepare.py --timeout_seconds 600
 """
 
@@ -15,6 +13,8 @@ from PIL import Image
 import pyarrow.parquet as pq
 import io
 
+# Paths and global variables
+
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 ARTIFACTS_DIR = os.path.join(os.path.dirname(__file__), "artifacts")
 
@@ -22,40 +22,17 @@ TIME_OUT = 600
 SEED = 42
 
 IMAGE_SIZE = 64
-CROP = False
 
 # Set random seeds for reproducibility
 def set_random_seeds(seed=SEED):
     np.random.seed(seed)
 
 # Preprocess a single image by center cropping and padding to 64x64, then convert to CHW format
-def preprocess_single_image(img_bytes, crop=CROP, target_h=IMAGE_SIZE, target_w=IMAGE_SIZE):
+def preprocess_single_image(img_bytes, target_h=IMAGE_SIZE, target_w=IMAGE_SIZE):
     img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
-    img_array = np.array(img)
-
-    if not crop:
-      img = img.resize((target_h, target_w), Image.BICUBIC)
-      img_arr = np.array(img)
-      return np.transpose(img_arr, (2, 0, 1))
-    
-    h, w, _ = img_array.shape
-
-    pad_h = max(0, target_h - h)
-    pad_w = max(0, target_w - w)
-
-    if pad_h > 0 or pad_w > 0:
-        pad_top = pad_h // 2
-        pad_bottom = pad_h - pad_top
-        pad_left = pad_w // 2
-        pad_right = pad_w - pad_left
-        img_array = np.pad(img_array, ((pad_top, pad_bottom), (pad_left, pad_right), (0, 0)), mode='reflect')
-        h, w, _ = img_array.shape
-
-    left = (w - target_w) // 2
-    top = (h - target_h) // 2
-    cropped = img_array[top:top+target_h, left:left+target_w]
-
-    return np.transpose(cropped, (2, 0, 1))
+    img = img.resize((target_h, target_w), Image.BICUBIC)
+    img_arr = np.array(img)
+    return np.transpose(img_arr, (2, 0, 1))
 
 # Extract features and labels from the dataframe
 def extract_features_and_labels(df):
@@ -70,7 +47,7 @@ def extract_features_and_labels(df):
         processed_img = preprocess_single_image(img_bytes)
         processed_img = processed_img.astype(np.float32) / 255.0
         processed_img = (processed_img - mean) / std
-        processed_images.append(processed_img.astype(np.float16))
+        processed_images.append(processed_img)
 
     X = np.stack(processed_images)
     y = df["source_class"].to_numpy()
@@ -79,7 +56,7 @@ def extract_features_and_labels(df):
 
     return X, y
 
-def process_and_save_npy(input_path, output_path, batch_size=500, balancing=True):
+def process_and_save_npy(input_path, output_path, batch_size=500):
 
     x_path = f"{output_path}_X.npy"
     y_path = f"{output_path}_y.npy"
@@ -115,19 +92,6 @@ def process_and_save_npy(input_path, output_path, batch_size=500, balancing=True
     os.makedirs(os.path.dirname(x_path), exist_ok=True)  
     os.makedirs(os.path.dirname(y_path), exist_ok=True)  
 
-    if balancing:
-        idx_0 = np.where(y == 0)[0]
-        idx_1 = np.where(y == 1)[0]
-        min_class_size = min(len(idx_0), len(idx_1))
-        idx_0_sampled = np.random.choice(idx_0, size=min_class_size, replace=False)
-        idx_1_sampled = np.random.choice(idx_1, size=min_class_size, replace=False)
-        balanced_indices = np.concatenate([idx_0_sampled, idx_1_sampled])
-
-        np.random.shuffle(balanced_indices)
-
-        X = X[balanced_indices]
-        y = y[balanced_indices]
-
     np.save(x_path, X)
     np.save(y_path, y)
 
@@ -145,19 +109,19 @@ def main():
     set_random_seeds()
 
     datasets = [
-        (os.path.join(ARTIFACTS_DIR, "task01"), os.path.join(ARTIFACTS_DIR, "task02/training_data"), False),
-        (os.path.join(DATA_DIR, "calibration"), os.path.join(ARTIFACTS_DIR, "task02/calibration_data"), False),
-        (os.path.join(DATA_DIR, "validation"), os.path.join(ARTIFACTS_DIR, "task02/validation_data"), False),
-        (os.path.join(DATA_DIR, "calibration_augmented"), os.path.join(ARTIFACTS_DIR, "task03/calibration_augmented_data"), False),
-        (os.path.join(DATA_DIR, "validation_augmented"), os.path.join(ARTIFACTS_DIR, "task03/validation_augmented_data"), False)
+        (os.path.join(ARTIFACTS_DIR, "task01"), os.path.join(ARTIFACTS_DIR, "task02/training_data")),
+        (os.path.join(DATA_DIR, "calibration"), os.path.join(ARTIFACTS_DIR, "task02/calibration_data")),
+        (os.path.join(DATA_DIR, "validation"), os.path.join(ARTIFACTS_DIR, "task02/validation_data")),
+        (os.path.join(DATA_DIR, "calibration_augmented"), os.path.join(ARTIFACTS_DIR, "task03/calibration_augmented_data")),
+        (os.path.join(DATA_DIR, "validation_augmented"), os.path.join(ARTIFACTS_DIR, "task03/validation_augmented_data"))
     ]
 
-    for input_dir, output_p, with_balancing in datasets:
+    for input_dir, output_p in datasets:
         if time.time() - start_time > args.timeout_seconds:
             print(f"\n[Timeout] Reached execution limit of {args.timeout_seconds} seconds.")
             sys.exit(1)
 
-        process_and_save_npy(input_dir, output_p, balancing=with_balancing)
+        process_and_save_npy(input_dir, output_p)
 
     print(f"\n[prepare.py] Done in {time.time() - start_time:.1f}s\n")
 

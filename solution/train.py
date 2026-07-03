@@ -18,6 +18,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader, Dataset
 import torch.nn as nn
 
+# Paths and global variables
 TIME_OUT = 1800
 SEED = 42
 
@@ -30,6 +31,8 @@ DEVICE = "cpu"
 
 K = 16
 IN_CHANNELS = 3
+
+torch.set_num_interop_threads(1)
 
 ARTIFACTS_DIR = os.path.join(os.path.dirname(__file__), "artifacts")
 
@@ -48,8 +51,9 @@ class ImageDataset(Dataset):
         return len(self.labels)
 
     def __getitem__(self, idx):
-        img = torch.from_numpy(np.array(self.images[idx])).float()
-        return img, torch.tensor(self.labels[idx]).long()
+        img = torch.tensor(self.images[idx], dtype=torch.float32)
+        label = torch.as_tensor(self.labels[idx], dtype=torch.long)
+        return img, label
     
 # Provided CNN model
 class Given_CNN(nn.Module):
@@ -129,8 +133,7 @@ def make_loader(X, y, batch_size=BATCH_SIZE, shuffle=True):
     
     dataset = ImageDataset(X, y)
     return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle,
-                        num_workers=2, generator=g if shuffle else None,
-                        persistent_workers=True)
+                        num_workers=0, generator=g if shuffle else None)
 
 # Initialize model weights with Kaiming He initialization for better convergence
 def init_weights(m):
@@ -203,12 +206,12 @@ def train_one_epoch(model, optimizer, loss_fn, train_loader, device):
   for batch, labels in train_loader:
     batch = batch.to(device)
     labels = labels.to(device)
+    optimizer.zero_grad(set_to_none=True)
     predictions = model(batch)
     loss = loss_fn(predictions, labels)
-    losses.append(loss.item())
-    optimizer.zero_grad()
     loss.backward()
     optimizer.step()
+    losses.append(loss.item())
 
   avg_loss = sum(losses) / len(losses)
   return avg_loss

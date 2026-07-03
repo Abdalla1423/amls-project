@@ -50,8 +50,9 @@ class ImageDataset(Dataset):
         return len(self.labels)
 
     def __getitem__(self, idx):
-        img = torch.from_numpy(np.array(self.images[idx])).float()
-        return img, torch.tensor(self.labels[idx]).long()
+        img = torch.tensor(self.images[idx], dtype=torch.float32)
+        label = torch.as_tensor(self.labels[idx], dtype=torch.long)
+        return img, label
     
 # Provided CNN model
 class Given_CNN(nn.Module):

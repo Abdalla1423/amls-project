@@ -24,8 +24,8 @@ SEED = 42
 
 BATCH_SIZE = 64
 NUM_EPOCHS = 50
-LR = 5e-3
-WD = 1e-2
+LR = 1e-5
+WD = 1e-4
 MAX_FPR = 0.20
 DEVICE = "cpu"
 
@@ -39,7 +39,7 @@ TASK03_DIR = os.path.join(ARTIFACTS_DIR, "task03")
 
 LOG_FILE = os.path.join(TASK03_DIR, "augmented_training_log.txt")
 FINETUNE_CHECKPOINT_PATH = os.path.join(TASK02_DIR, "best_model.pt")
-CHECKPOINT_PATH = os.path.join(TASK03_DIR, "best_model.pt")
+CHECKPOINT_PATH = os.path.join(TASK02_DIR, "last_model.pt")
 
 # Custom Dataset class to load images and labels from our cleaned parquet file, with data augmentation for training
 class AddGaussianNoise(object):
@@ -66,21 +66,21 @@ class AugmentedImageDataset(Dataset):
         self.normalize = T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
         self.train_transforms = T.Compose([
-            T.RandomHorizontalFlip(p=0.5),
-            T.RandomVerticalFlip(p=0.5),
+            T.RandomHorizontalFlip(p=0.3),
+            T.RandomVerticalFlip(p=0.3),
             T.RandomApply([
                 T.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.05, hue=0.02)
-            ], p=0.5),
+            ], p=0.3),
             T.RandomApply([T.GaussianBlur(kernel_size=3, sigma=(0.1, 0.5))], p=0.1),
-            T.RandomApply([AddGaussianNoise(mean=0.0, std_max=0.015)], p=0.1),
+            T.RandomApply([AddGaussianNoise(mean=0.0, std_max=0.015)], p=0.05),
         ])
 
     def __len__(self):
         return len(self.labels)
 
     def __getitem__(self, idx):
-        img = torch.from_numpy(np.array(self.images[idx])).float()
-
+        img = torch.tensor(self.images[idx], dtype=torch.float32)
+        label = torch.as_tensor(self.labels[idx], dtype=torch.long)
         # Apply augmentations
         if self.is_training:
             img = (img * self.std) + self.mean
@@ -89,8 +89,9 @@ class AugmentedImageDataset(Dataset):
             img = self.train_transforms(img)
             img = torch.clamp(img, 0.0, 1.0)
             
-        img = self.normalize(img)
-        return img, torch.tensor(self.labels[idx]).long()
+            img = self.normalize(img)
+            
+        return img, label
     
 # Provided CNN model
 class Given_CNN(nn.Module):
@@ -140,7 +141,10 @@ class Given_CNN(nn.Module):
         return x
 
 def load_model():
-    ckpt = torch.load(FINETUNE_CHECKPOINT_PATH, map_location="cpu", weights_only=False)
+    if not os.path.exists(CHECKPOINT_PATH):
+        print("ERROR: best_model.pt not found. Run train.py first.")
+        sys.exit(1)
+    ckpt = torch.load(CHECKPOINT_PATH, map_location="cpu", weights_only=False)
     model = Given_CNN()
     model.load_state_dict(ckpt["state_dict"])
 
@@ -153,6 +157,7 @@ def print_ram_usage(msg=""):
 
 # Set random seeds for reproducibility
 def set_random_seeds(seed=SEED):
+    random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
@@ -190,16 +195,10 @@ def init_weights(m):
         torch.nn.init.zeros_(m.bias)
 
 # Initialize CNN model and optimizer for deep learning prediction
-def initialize_model_and_optimizer(finetune, num_epochs=NUM_EPOCHS):
-    if finetune:
-        model = load_model()
-    else:
-        model = Given_CNN()
-        model.to(DEVICE)
-        model.apply(init_weights)
-        
-    optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=1e-2)
-    scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs)
+def initialize_model_and_optimizer():
+    model = load_model()
+    optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WD)
+    scheduler = CosineAnnealingLR(optimizer, T_max=20)
     return model, optimizer, scheduler
 
 # Initialize loss function for training
@@ -217,7 +216,7 @@ def calibrate_threshold(model, cal_loader, max_fpr=MAX_FPR):
 
     target_fpr = max_fpr * 0.85  # safety margin
     best_thr, best_recall = 0.5, 0.0
-    for thr in np.arange(0.05, 0.96, 0.01):
+    for thr in np.arange(0.05, 0.96, 0.001):
         fpr = (real_probs >= thr).mean()
         recall = (ai_probs >= thr).mean() if len(ai_probs) > 0 else 0.0
         if fpr <= target_fpr and recall > best_recall:
@@ -268,7 +267,6 @@ def train_one_epoch(model, optimizer, loss_fn, train_loader, device):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--timeout_seconds", type=int, default=TIME_OUT)
-    parser.add_argument("--finetune", type=bool, default=True)
     args = parser.parse_args()
 
     start_time = time.time()
@@ -296,7 +294,7 @@ def main():
     print(f"Train: {X_tr.shape}  real={int((y_tr == 0).sum())}  ai={int((y_tr == 1).sum())}")
 
     # 2.1. Build model, optimizer
-    model, optimizer, scheduler = initialize_model_and_optimizer(finetune=args.finetune)
+    model, optimizer, scheduler = initialize_model_and_optimizer()
 
     # 2.2. Compute class weights for imbalanced training data and initialize loss function
     n_real = int((y_tr == 0).sum())
