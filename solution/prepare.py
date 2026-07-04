@@ -5,29 +5,32 @@ Usage: python prepare.py --timeout_seconds 600
 
 import argparse
 import os
+import io
 import sys
 import glob
 import time 
+
 import numpy as np
-from PIL import Image
 import pyarrow.parquet as pq
-import io
+from PIL import Image, UnidentifiedImageError
 
 # Paths and global variables
-
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 ARTIFACTS_DIR = os.path.join(os.path.dirname(__file__), "artifacts")
 
 TIME_OUT = 600
 SEED = 42
-
 IMAGE_SIZE = 64
+BATCH_SIZE = 500
+
+IMAGE_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32).reshape(3, 1, 1)
+IMAGE_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(3, 1, 1)
 
 # Set random seeds for reproducibility
 def set_random_seeds(seed=SEED):
     np.random.seed(seed)
 
-# Preprocess a single image by center cropping and padding to 64x64, then convert to CHW format
+# Center-resize an image to (target_h, target_w) and return it in CHW format
 def preprocess_single_image(img_bytes, target_h=IMAGE_SIZE, target_w=IMAGE_SIZE):
     img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
     img = img.resize((target_h, target_w), Image.BICUBIC)
@@ -37,25 +40,28 @@ def preprocess_single_image(img_bytes, target_h=IMAGE_SIZE, target_w=IMAGE_SIZE)
 # Extract features and labels from the dataframe
 def extract_features_and_labels(df):
     processed_images = []
+    labels = []
 
-    mean = np.array([0.485, 0.456, 0.406],
-                    dtype=np.float32).reshape(3, 1, 1)
-    std = np.array([0.229, 0.224, 0.225],
-                   dtype=np.float32).reshape(3, 1, 1)
-    
-    for img_bytes in df["image"].values:
-        processed_img = preprocess_single_image(img_bytes)
+    for row in df.itertuples(index=False):
+        try: 
+            processed_img = preprocess_single_image(row.image)
+        except (UnidentifiedImageError) as e:
+            print(f"Skipping unreadable image: {e}")
+            continue
+
         processed_img = processed_img.astype(np.float32) / 255.0
-        processed_img = (processed_img - mean) / std
+        processed_img = (processed_img - IMAGE_MEAN) / IMAGE_STD
         processed_images.append(processed_img)
+        labels.append(row.source_class)
 
     X = np.stack(processed_images)
-    y = df["source_class"].to_numpy()
-
+    y = np.array(labels)
     y = np.where(y > 0, 1, y).astype(np.int8)
 
     return X, y
 
+# Read every parquet file under input_path in batches, preprocess it, and
+# save the concatenated features/labels to f"{output_path}_X.npy" / "_y.npy".
 def process_and_save_npy(input_path, output_path, batch_size=500):
 
     x_path = f"{output_path}_X.npy"
@@ -74,7 +80,12 @@ def process_and_save_npy(input_path, output_path, batch_size=500):
 
     for fp in file_paths:
         print(f"Reading {fp} in batches...")
-        parquet_file = pq.ParquetFile(fp)
+        
+        try:
+            parquet_file = pq.ParquetFile(fp)
+        except Exception as e:
+            print(f"Could not open {fp} due to: {e}")
+            continue
         
         for batch in parquet_file.iter_batches(batch_size=batch_size, columns=["image", "source_class"]):
             df = batch.to_pandas()
@@ -83,8 +94,7 @@ def process_and_save_npy(input_path, output_path, batch_size=500):
             X_parts.append(X_part)
             y_parts.append(y_part)
 
-            del df
-            del batch
+            del df, batch
 
     X = np.concatenate(X_parts, axis=0)
     y = np.concatenate(y_parts, axis=0)

@@ -5,15 +5,15 @@ Outputs: artifacts/task02/predictions.csv (columns: row_id, predicted_label)
 Usage: python predict.py --timeout_seconds 600
 """
 
+# Paths and global variables
 import argparse
 import os
 import sys
 import csv
 import glob
-import pandas as pd
 import numpy as np
 import pyarrow.parquet as pq
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 import io
 import time
 
@@ -40,6 +40,9 @@ DEVICE = "cpu"
 
 K = 16
 IN_CHANNELS = 3
+
+IMAGE_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32).reshape(3, 1, 1)
+IMAGE_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(3, 1, 1)
 
 # Custom Dataset class to load images and labels from our cleaned parquet file
 class ImageDataset(Dataset):
@@ -102,6 +105,7 @@ class Given_CNN(nn.Module):
         x = self.classifier(x)
         return x
 
+# Print RAM usage
 def print_ram_usage(msg=""):
     process = psutil.Process(os.getpid())
     ram_gb = process.memory_info().rss / (1024**3)
@@ -116,7 +120,7 @@ def set_random_seeds(seed=SEED):
     torch.use_deterministic_algorithms(True)
     torch.set_num_threads(min(8, os.cpu_count() or 1))
 
-# Loads the best model trained in task02
+# Load the best model trained in task02
 def load_model():
     if not os.path.exists(CHECKPOINT_PATH):
         return None
@@ -135,10 +139,9 @@ def save_predictions(all_preds, save_path=PREDICTIONS):
         for id, pred in enumerate(all_preds):
             writer.writerow([id, pred])
 
-# Preprocess a single image by center cropping and padding to 64x64, then convert to CHW format
+# Center-resize an image to (target_h, target_w) and return it in CHW format
 def preprocess_single_image(img_bytes, target_h=IMAGE_SIZE, target_w=IMAGE_SIZE):
     img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
-
     img = img.resize((target_h, target_w), Image.BICUBIC)
     img_arr = np.array(img)
     return np.transpose(img_arr, (2, 0, 1))
@@ -146,21 +149,22 @@ def preprocess_single_image(img_bytes, target_h=IMAGE_SIZE, target_w=IMAGE_SIZE)
 # Extract features and labels from the dataframe
 def extract_features_and_labels(df):
     processed_images = []
-
-    mean = np.array([0.485, 0.456, 0.406],
-                    dtype=np.float32).reshape(3, 1, 1)
-    std = np.array([0.229, 0.224, 0.225],
-                   dtype=np.float32).reshape(3, 1, 1)
     
     for img_bytes in df["image"].values:
-        processed_img = preprocess_single_image(img_bytes)
+        try: 
+            processed_img = preprocess_single_image(img_bytes)
+        except (UnidentifiedImageError) as e:
+            print(f"Skipping unreadable image: {e}")
+            continue
+
         processed_img = processed_img.astype(np.float32) / 255.0
-        processed_img = (processed_img - mean) / std
+        processed_img = (processed_img - IMAGE_MEAN) / IMAGE_STD
         processed_images.append(processed_img.astype(np.float16))
 
     X = np.stack(processed_images)
     return X
 
+# Read predict parquet file under input_path in batches, preprocess it
 def process_parquet(input_path, batch_size=500):
 
     print(f"Processing {input_path}...")
@@ -183,14 +187,14 @@ def process_parquet(input_path, batch_size=500):
             X_part = extract_features_and_labels(df)
             X_parts.append(X_part)
 
-            del df
-            del batch
+            del df, batch
 
     X = np.concatenate(X_parts, axis=0)
     y = np.zeros(len(X), dtype=np.int64)
 
     return X, y
 
+# Prepare the data loader
 def make_loader(X, y, batch_size=BATCH_SIZE):
     dataset = ImageDataset(X, y)
     return DataLoader(dataset, batch_size=batch_size, 
@@ -203,22 +207,23 @@ def main():
 
     start_time = time.time()
 
-    # 0. Set random seeds for reproducibility
     set_random_seeds()
 
     os.makedirs(TASK02_DIR, exist_ok=True)
 
     # 1. Load trained model from ARTIFACTS_DIR
     print("\n=== Loading model ===")
-    print_ram_usage("Start")
-    model = load_model()
 
+    print_ram_usage("Start")
+
+    model = load_model()
     if model is None:
         print("ERROR: best_model.pt not found. Run train.py first.")
         sys.exit(1)
 
     # 2. Load predict data from PREDICT_DIR (parquet with columns: row_id, image)
     print("\n=== Loading data ===")
+    
     X, y = process_parquet(PREDICT_DIR)
     data_loader = make_loader(X, y, batch_size=BATCH_SIZE)
 

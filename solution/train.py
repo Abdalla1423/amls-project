@@ -39,7 +39,9 @@ ARTIFACTS_DIR = os.path.join(os.path.dirname(__file__), "artifacts")
 TASK02_DIR = os.path.join(ARTIFACTS_DIR, "task02")
 
 LOG_FILE = os.path.join(TASK02_DIR, "training_log.txt")
-CHECKPOINT_PATH = os.path.join(TASK02_DIR, "best_model.pth")
+
+BEST_MODEL_PATH = os.path.join(TASK02_DIR, "best_model.pt")
+LAST_MODEL_PATH = os.path.join(TASK02_DIR, "last_model.pt")
 
 # Custom Dataset class to load images and labels from our cleaned parquet file
 class ImageDataset(Dataset):
@@ -102,6 +104,7 @@ class Given_CNN(nn.Module):
         x = self.classifier(x)
         return x
 
+# Print RAM usage
 def print_ram_usage(msg=""):
     process = psutil.Process(os.getpid())
     ram_gb = process.memory_info().rss / (1024**3)
@@ -116,7 +119,7 @@ def set_random_seeds(seed=SEED):
     torch.use_deterministic_algorithms(True)
     torch.set_num_threads(min(8, os.cpu_count() or 1))
 
-# Prepare training dataloaders with balanced classes (for both train and test sets)
+# Load a preprocessed (X, y) split saved by prepare.py
 def load_data_split(split_name):
     x_path = os.path.join(ARTIFACTS_DIR, f"{split_name}_X.npy")
     y_path = os.path.join(ARTIFACTS_DIR, f"{split_name}_y.npy")
@@ -127,6 +130,7 @@ def load_data_split(split_name):
     y = np.load(y_path, mmap_mode='r')
     return X, y
 
+# Prepare the data loader
 def make_loader(X, y, batch_size=BATCH_SIZE, shuffle=True):
     g = torch.Generator()
     g.manual_seed(42)
@@ -135,7 +139,7 @@ def make_loader(X, y, batch_size=BATCH_SIZE, shuffle=True):
     return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle,
                         num_workers=0, generator=g if shuffle else None)
 
-# Initialize model weights with Kaiming He initialization for better convergence
+# Kaiming He initialization for conv/linear layers, standard init for BatchNorm.
 def init_weights(m):
     if isinstance(m, torch.nn.Conv2d) or isinstance(m, torch.nn.Linear):
         torch.nn.init.kaiming_normal_(m.weight, mode="fan_in", nonlinearity="relu")
@@ -177,7 +181,7 @@ def calibrate_threshold(model, cal_loader, max_fpr=MAX_FPR):
             best_thr = float(thr)
     return best_thr
 
-# Get predicted probabilities from the model for a given dataset
+# Get predicted probabilities from the model
 def get_probs(model, loader):
     model.eval()
     all_p, all_y = [], []
@@ -226,40 +230,33 @@ def hyperparameter_tune(lrs, wds):
             recall = main(lr=lr, wd=wd)
             cols.append(recall)
         rows.append(cols)
+        
     results = np.array(rows)
     plt.figure(figsize=(8, 6))
     im = plt.imshow(results, aspect='auto')
 
     for i in range(results.shape[0]):
         for j in range(results.shape[1]):
-            plt.text(
-                j,
-                i,
-                f"{results[i, j]:.4f}",
-                ha="center",
-                va="center"
-            )
+            plt.text(j, i, f"{results[i, j]:.4f}", ha="center", va="center")
 
     plt.colorbar(im, label="Best Recall_AI")
 
-    plt.xticks(
-        range(len(wds)),
-        [str(wd) for wd in wds]
-    )
-
-    plt.yticks(
-        range(len(lrs)),
-        [str(lr) for lr in lrs]
-    )
+    plt.xticks(range(len(wds)), [str(wd) for wd in wds])
+    plt.yticks(range(len(lrs)), [str(lr) for lr in lrs])
 
     plt.xlabel("Weight Decay")
     plt.ylabel("Learning Rate")
     plt.title("Grid Search Results (Best Recall_AI)")
 
     plt.tight_layout()
-    plt.show()
 
-# Deep learning prediction with a simple CNN classifier
+    save_path = os.path.join(TASK02_DIR, "hyperparameter_tuning.png")
+    plt.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.close()
+
+    print(f"Saved parameter tuning plot to: {save_path}")
+
+# Train the CNN classifier. Returns the best AI-recall achieved on validation
 def main(lr=LR, wd=WD):
     parser = argparse.ArgumentParser()
     parser.add_argument("--timeout_seconds", type=int, default=TIME_OUT)
@@ -268,9 +265,7 @@ def main(lr=LR, wd=WD):
     start_time = time.time()
     deadline = start_time + args.timeout_seconds - 120 
 
-    # 0. Set random seeds for reproducibility
     set_random_seeds()
-
     os.makedirs(TASK02_DIR, exist_ok=True)
 
     # 1. Load prepared training and validation data from ARTIFACTS_DIR
@@ -330,7 +325,7 @@ def main(lr=LR, wd=WD):
                 torch.save({"state_dict": model.state_dict(),
                             "threshold": best_thr, "epoch": epoch+1,
                             "recall_ai": best_recall, "fpr": metrics["fpr"]},
-                            os.path.join(TASK02_DIR, "best_model.pt"))
+                            BEST_MODEL_PATH)
                 with open(LOG_FILE, mode="a") as file:
                     file.write(f"New best model saved at epoch {epoch+1} with recall_ai={best_recall:.4f} and FPR={metrics['fpr']:.4f} at threshold={best_thr:.4f}\n")
         
@@ -339,8 +334,7 @@ def main(lr=LR, wd=WD):
 
     # Always save last model
     thr_final = calibrate_threshold(model, cal_loader)
-    torch.save({"state_dict": model.state_dict(), "threshold": thr_final,}, 
-               os.path.join(TASK02_DIR, "last_model.pt"))
+    torch.save({"state_dict": model.state_dict(), "threshold": thr_final,}, LAST_MODEL_PATH)
 
     with open(LOG_FILE, mode="a") as file:
         file.write(f"\n[train.py] Done in {time.time() - start_time:.1f}s\n")
@@ -350,5 +344,5 @@ def main(lr=LR, wd=WD):
 
 
 if __name__ == "__main__":
-    main()
-    #hyperparameter_tune(lrs=[0.0005, 0.001, 0.005], wds=[0.0001, 0.001, 0.01])
+    # main()
+    hyperparameter_tune(lrs=[0.005], wds=[0.0001])

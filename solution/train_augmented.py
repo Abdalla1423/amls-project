@@ -19,13 +19,14 @@ from torch.utils.data import DataLoader, Dataset
 import torch.nn as nn
 import torchvision.transforms as T
 
+# Paths and global variables
 TIME_OUT = 1800
 SEED = 42
 
 BATCH_SIZE = 64
 NUM_EPOCHS = 50
-LR = 1e-5
-WD = 1e-4
+LR = 0.005
+WD = 0.0001
 MAX_FPR = 0.20
 DEVICE = "cpu"
 
@@ -38,8 +39,10 @@ TASK02_DIR = os.path.join(ARTIFACTS_DIR, "task02")
 TASK03_DIR = os.path.join(ARTIFACTS_DIR, "task03")
 
 LOG_FILE = os.path.join(TASK03_DIR, "augmented_training_log.txt")
+
 FINETUNE_CHECKPOINT_PATH = os.path.join(TASK02_DIR, "best_model.pt")
 CHECKPOINT_PATH = os.path.join(TASK02_DIR, "last_model.pt")
+BEST_MODEL_PATH = os.path.join(TASK03_DIR, "best_model.pt")
 
 # Custom Dataset class to load images and labels from our cleaned parquet file, with data augmentation for training
 class AddGaussianNoise(object):
@@ -66,13 +69,13 @@ class AugmentedImageDataset(Dataset):
         self.normalize = T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
         self.train_transforms = T.Compose([
-            T.RandomHorizontalFlip(p=0.3),
-            T.RandomVerticalFlip(p=0.3),
+            T.RandomHorizontalFlip(p=0.5),
+            T.RandomVerticalFlip(p=0.5),
             T.RandomApply([
                 T.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.05, hue=0.02)
             ], p=0.3),
             T.RandomApply([T.GaussianBlur(kernel_size=3, sigma=(0.1, 0.5))], p=0.1),
-            T.RandomApply([AddGaussianNoise(mean=0.0, std_max=0.015)], p=0.05),
+            T.RandomApply([AddGaussianNoise(mean=0.0, std_max=0.015)], p=0.1),
         ])
 
     def __len__(self):
@@ -90,7 +93,7 @@ class AugmentedImageDataset(Dataset):
             img = torch.clamp(img, 0.0, 1.0)
             
             img = self.normalize(img)
-            
+
         return img, label
     
 # Provided CNN model
@@ -140,6 +143,7 @@ class Given_CNN(nn.Module):
         x = self.classifier(x)
         return x
 
+# Load the pretrained model
 def load_model():
     if not os.path.exists(CHECKPOINT_PATH):
         print("ERROR: best_model.pt not found. Run train.py first.")
@@ -150,6 +154,7 @@ def load_model():
 
     return model
 
+# Print RAM usage
 def print_ram_usage(msg=""):
     process = psutil.Process(os.getpid())
     ram_gb = process.memory_info().rss / (1024**3)
@@ -165,7 +170,7 @@ def set_random_seeds(seed=SEED):
     torch.use_deterministic_algorithms(True)
     torch.set_num_threads(min(8, os.cpu_count() or 1))
 
-# Prepare training dataloaders with balanced classes (for both train and test sets)
+# Load a preprocessed (X, y) split saved by prepare.py
 def load_data_split(split_name):
     x_path = os.path.join(ARTIFACTS_DIR, f"{split_name}_X.npy")
     y_path = os.path.join(ARTIFACTS_DIR, f"{split_name}_y.npy")
@@ -176,6 +181,7 @@ def load_data_split(split_name):
     y = np.load(y_path, mmap_mode='r')
     return X, y
 
+# Prepare the data loader
 def make_loader(X, y, batch_size=BATCH_SIZE, shuffle=True):
     g = torch.Generator()
     g.manual_seed(42)
@@ -184,7 +190,7 @@ def make_loader(X, y, batch_size=BATCH_SIZE, shuffle=True):
     return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle,
                         num_workers=0, generator=g if shuffle else None)
 
-# Initialize model weights with Kaiming He initialization for better convergence
+# Kaiming He initialization for conv/linear layers, standard init for BatchNorm.
 def init_weights(m):
     if isinstance(m, torch.nn.Conv2d) or isinstance(m, torch.nn.Linear):
         torch.nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
@@ -195,9 +201,11 @@ def init_weights(m):
         torch.nn.init.zeros_(m.bias)
 
 # Initialize CNN model and optimizer for deep learning prediction
-def initialize_model_and_optimizer():
-    model = load_model()
-    optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WD)
+def initialize_model_and_optimizer(lr, wd):
+    model = Given_CNN()
+    model.to(DEVICE)
+    model.apply(init_weights)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
     scheduler = CosineAnnealingLR(optimizer, T_max=20)
     return model, optimizer, scheduler
 
@@ -224,7 +232,7 @@ def calibrate_threshold(model, cal_loader, max_fpr=MAX_FPR):
             best_thr = float(thr)
     return best_thr
 
-# Get predicted probabilities from the model for a given dataset
+# Get predicted probabilities from the model
 def get_probs(model, loader):
     model.eval()
     all_p, all_y = [], []
@@ -253,18 +261,18 @@ def train_one_epoch(model, optimizer, loss_fn, train_loader, device):
   for batch, labels in train_loader:
     batch = batch.to(device)
     labels = labels.to(device)
+    optimizer.zero_grad(set_to_none=True)
     predictions = model(batch)
     loss = loss_fn(predictions, labels)
-    losses.append(loss.item())
-    optimizer.zero_grad()
     loss.backward()
     optimizer.step()
+    losses.append(loss.item())
 
   avg_loss = sum(losses) / len(losses)
   return avg_loss
 
 # Deep learning prediction with a simple CNN classifier
-def main():
+def main(lr=LR, wd=WD):
     parser = argparse.ArgumentParser()
     parser.add_argument("--timeout_seconds", type=int, default=TIME_OUT)
     args = parser.parse_args()
@@ -272,7 +280,6 @@ def main():
     start_time = time.time()
     deadline = start_time + args.timeout_seconds - 120 
 
-    # 0. Set random seeds for reproducibility
     set_random_seeds()
 
     # 1. Load prepared training and validation data from ARTIFACTS_DIR
@@ -294,7 +301,7 @@ def main():
     print(f"Train: {X_tr.shape}  real={int((y_tr == 0).sum())}  ai={int((y_tr == 1).sum())}")
 
     # 2.1. Build model, optimizer
-    model, optimizer, scheduler = initialize_model_and_optimizer()
+    model, optimizer, scheduler = initialize_model_and_optimizer(lr, wd)
 
     # 2.2. Compute class weights for imbalanced training data and initialize loss function
     n_real = int((y_tr == 0).sum())
@@ -332,7 +339,7 @@ def main():
                 torch.save({"state_dict": model.state_dict(),
                             "threshold": best_thr, "epoch": epoch+1,
                             "recall_ai": best_recall, "fpr": metrics["fpr"]},
-                            os.path.join(TASK03_DIR, "best_model.pt"))
+                            BEST_MODEL_PATH)
                 with open(LOG_FILE, mode="a") as file:
                     file.write(f"New best model saved at epoch {epoch+1} with recall_ai={best_recall:.4f} and FPR={metrics['fpr']:.4f} at threshold={best_thr:.4f}\n")
         

@@ -7,7 +7,7 @@ import argparse
 import os
 import time
 import pandas as pd
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 import io
 import matplotlib.pyplot as plt
 from collections import Counter, defaultdict
@@ -16,16 +16,19 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 # Paths and global variables
-DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
-ARTIFACTS_DIR = os.path.join(os.path.dirname(__file__), "artifacts")
+BASE_DIR = os.path.dirname(__file__)
+DATA_DIR = os.path.join(BASE_DIR, "data")
 TRAIN_DIR = os.path.join(DATA_DIR, "train")
+ARTIFACTS_DIR = os.path.join(BASE_DIR, "artifacts")
+TASK_DIR = os.path.join(ARTIFACTS_DIR, "task01")
 
 LOG_FILE = os.path.join(ARTIFACTS_DIR, "task01/data_exploration_and_cleaning.txt")
+CLEANED_PARQUET = os.path.join(TASK_DIR, "training_dataset.parquet")
 
 TIME_OUT = 600
 
 # Log gathered information to artifacts/task01/data_exploration_and_cleaning.txt
-def write_log(total_seen, total_saved, total_duplicates, class_sizes, class_shapes, class_formats):
+def write_log(total_seen, total_saved, total_duplicates, total_file_errors, class_sizes, class_shapes, class_formats):
     class_0_sizes = class_sizes.get(0, [])
 
     class_0_count = len(class_0_sizes)
@@ -44,7 +47,8 @@ def write_log(total_seen, total_saved, total_duplicates, class_sizes, class_shap
         file.write("\n=== FINAL SUMMARY ===\n")
         file.write(f"Total samples processed: {total_seen:,}\n")
         file.write(f"Total samples saved:     {total_saved:,}\n")
-        file.write(f"Total duplicates:       {total_duplicates:,}\n")
+        file.write(f"Total file errors:       {total_file_errors:,}\n")
+        file.write(f"Total duplicates:        {total_duplicates:,}\n")
 
         file.write("\n=== TARGET BINARY CLASS DISTRIBUTION ===\n")
         file.write(f"Class 0 (REAL) - Count: {class_0_count} ({class_0_count/total * 100:.1f}%) | Average Size: {class_0_average:.2f} KB\n")
@@ -85,16 +89,23 @@ def clean_data(files, save_path, timeout_seconds):
     total_seen = 0
     total_saved = 0
     total_duplicates = 0
+    total_file_errors = 0
 
     for f in files:
         print(f"Cleaning file {f}")
         if timeout_triggered:
             break
-        df = pd.read_parquet(f)
+
+        try:
+            df = pd.read_parquet(f)
+        except Exception as e:
+            print(f" Skipping file {f}, due to {e}")
+            continue
 
         file_seen = 0
         file_saved = 0
         file_duplicates = 0
+        file_errors = 0
 
         processed_rows = []
 
@@ -110,7 +121,12 @@ def clean_data(files, save_path, timeout_seconds):
             label = row.source_class
             raw_bytes = row.image
 
-            img_hash, img = process_image(raw_bytes)
+            try:
+                img_hash, img = process_image(raw_bytes)
+            except(UnidentifiedImageError) as e:
+                file_errors += 1
+                print(f"Corrupt / Unreadable image skipping: {e}")
+                continue
 
             if img_hash in seen_hashes:
                 total_duplicates += 1
@@ -143,13 +159,14 @@ def clean_data(files, save_path, timeout_seconds):
             f"File summary -> "
             f"Seen: {file_seen:,}, "
             f"Saved: {file_saved:,}, "
-            f"Duplicates removed: {file_duplicates:,}"
+            f"Duplicates removed: {file_duplicates:,}, "
+            f"Total file errors: {file_errors}"
         )
 
     if writer:
         writer.close()
 
-    write_log(total_seen, total_saved, total_duplicates, class_sizes, class_shapes, class_formats)
+    write_log(total_seen, total_saved, total_duplicates, total_file_errors, class_sizes, class_shapes, class_formats)
 
 def main():
     parser = argparse.ArgumentParser()
@@ -161,11 +178,16 @@ def main():
     os.makedirs(ARTIFACTS_DIR, exist_ok=True)
     os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
 
-    CLEANED_DIR = os.path.join(ARTIFACTS_DIR, "task01/training_dataset.parquet")
-    os.makedirs(os.path.dirname(CLEANED_DIR), exist_ok=True)
+    if not os.path.isdir(TRAIN_DIR):
+        raise FileNotFoundError(f"Training data directory not found: {TRAIN_DIR}")
 
-    files = sorted(os.listdir(TRAIN_DIR))
-    clean_data([os.path.join(TRAIN_DIR, f) for f in files], CLEANED_DIR, timeout_seconds=args.timeout_seconds)
+    os.makedirs(os.path.dirname(CLEANED_PARQUET), exist_ok=True)
+
+    files = sorted(os.path.join(TRAIN_DIR, f) for f in os.listdir(TRAIN_DIR) if f.endswith(".parquet"))
+    if not files:
+        raise FileNotFoundError(f"No parquet files found in {TRAIN_DIR}")
+    
+    clean_data(files, CLEANED_PARQUET, timeout_seconds=args.timeout_seconds)
     
     print(f"\n[clean.py] Done in {time.time() - start_time:.1f}s\n")
 
