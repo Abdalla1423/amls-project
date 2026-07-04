@@ -230,7 +230,7 @@ def hyperparameter_tune(lrs, wds):
             recall = main(lr=lr, wd=wd)
             cols.append(recall)
         rows.append(cols)
-        
+
     results = np.array(rows)
     plt.figure(figsize=(8, 6))
     im = plt.imshow(results, aspect='auto')
@@ -344,5 +344,5 @@ def main(lr=LR, wd=WD):
 
 
 if __name__ == "__main__":
-    # main()
-    hyperparameter_tune(lrs=[0.005], wds=[0.0001])
+    main()
+    # hyperparameter_tune(lrs=[0.005], wds=[0.0001])
