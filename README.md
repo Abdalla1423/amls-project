@@ -5,19 +5,12 @@ Binary classification pipeline to detect AI-generated images.
 ## Prerequisites
 
 - **Docker Desktop** installed and running
-- Dataset downloaded and placed in `data/` (see structure below)
+- Dataset downloaded and placed in `solution/data/` (see structure below)
 
 ## Project Structure
 
 ```
 amls-project/
-├── data/                          # Dataset (read-only at runtime)
-│   ├── train/
-│   ├── calibration/
-│   ├── calibration_augmented/
-│   ├── validation/
-│   ├── validation_augmented/
-│   └── predict/
 ├── solution/
 │   ├── Dockerfile
 │   ├── requirements.txt
@@ -27,6 +20,13 @@ amls-project/
 │   ├── predict.py                 # Task 1.2 – Inference → artifacts/task02/predictions.csv
 │   ├── train_augmented.py         # Task 1.3 – Augmented training
 │   ├── predict_augmented.py       # Task 1.3 – Inference → artifacts/task03/predictions.csv
+│   ├── data/                      # Dataset (read-only at runtime)
+│   │   ├── train/
+│   │   ├── calibration/
+│   │   ├── calibration_augmented/
+│   │   ├── validation/
+│   │   ├── validation_augmented/
+│   │   └── predict/
 │   └── artifacts/                 # Created at runtime (models, predictions)
 │       ├── task02/predictions.csv
 │       └── task03/predictions.csv
@@ -49,7 +49,7 @@ This installs Python 3.11, all pip dependencies, and CPU-only PyTorch 2.5.1.
 
 ```bash
 docker run --cpus 8 \
-  -v "$(pwd)/data:/workspace/solution/data:ro" \
+  -v "$(pwd)/solution/data:/workspace/solution/data:ro" \
   -v "$(pwd)/solution/artifacts:/workspace/solution/artifacts" \
   amls bash -c "\
     python clean.py --timeout_seconds 600 && \
@@ -62,7 +62,7 @@ docker run --cpus 8 \
 
 **What this does:**
 - `--cpus 8` — limits the container to 8 CPU cores (matches grading environment)
-- `-v .../data:ro` — mounts the dataset as **read-only** inside the container
+- `-v .../solution/data:ro` — mounts the dataset as **read-only** inside the container
 - `-v .../artifacts` — mounts the artifacts folder so results persist after the container stops
 
 ### 3. Run individual scripts
@@ -71,7 +71,7 @@ To run a single step (e.g. just cleaning):
 
 ```bash
 docker run --cpus 8 \
-  -v "$(pwd)/data:/workspace/solution/data:ro" \
+  -v "$(pwd)/solution/data:/workspace/solution/data:ro" \
   -v "$(pwd)/solution/artifacts:/workspace/solution/artifacts" \
   amls python clean.py --timeout_seconds 600
 ```
@@ -92,10 +92,9 @@ pip install -r requirements.txt
 pip install --index-url https://download.pytorch.org/whl/cpu torch==2.5.1
 ```
 
-Then run scripts directly (make sure `data/` is symlinked or copied into `solution/`):
+Then run scripts directly:
 
 ```bash
-ln -s ../data data
 python clean.py --timeout_seconds 600
 python prepare.py --timeout_seconds 600
 python train.py --timeout_seconds 1800
@@ -103,6 +102,8 @@ python predict.py --timeout_seconds 600
 python train_augmented.py --timeout_seconds 1800
 python predict_augmented.py --timeout_seconds 600
 ```
+
+No symlink is needed if the dataset is already in `solution/data/`.
 
 ## Script Execution Order
 
