@@ -34,7 +34,7 @@ from common import (
 )
 
 TIME_OUT = 1800
-NUM_EPOCHS = 100
+NUM_EPOCHS = 50
 LR = 0.005
 WD = 0.0001
 
