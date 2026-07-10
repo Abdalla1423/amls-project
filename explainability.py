@@ -1,4 +1,4 @@
-"""explainability.py - Saliency, occlusion, Grad-CAM, and error analysis (Task 4)."""
+"""explainability.py - Occlusion, Grad-CAM, and error analysis (Task 4)."""
 
 import os
 import random
@@ -60,47 +60,6 @@ def get_val_predictions(model, data, threshold, batch_size=128):
     preds = (probs >= threshold).astype(np.int64)
     labels = np.asarray(y).astype(np.int64)
     return probs, preds, labels
-
-
-# --- Saliency ---------------------------------------------------------------
-
-def compute_saliency_map(model, img_tensor, target_class):
-    model.eval()
-    img_tensor.requires_grad_()
-    logits = model(img_tensor)
-    if target_class is None:
-        target_class = int(logits.argmax(dim=1).item())
-    score = logits[0, target_class]
-    model.zero_grad()
-    score.backward()
-    saliency, _ = torch.max(img_tensor.grad.data.abs(), dim=1)
-    return saliency.squeeze()
-
-
-def plot_saliency_maps(model, data, indices, save_path, num_samples=3):
-    X, y = data
-    fig, axes = plt.subplots(nrows=num_samples, ncols=2, figsize=(8, 3 * num_samples))
-
-    for i, idx in enumerate(indices):
-        img_array = X[idx].astype(np.float32)
-        label = int(y[idx])
-        img_tensor = torch.tensor(img_array).unsqueeze(0)
-
-        pred_class = predict_class(model, img_tensor.clone())
-        saliency = compute_saliency_map(model, img_tensor, target_class=label).cpu().numpy()
-
-        color = "green" if pred_class == label else "red"
-        axes[i][0].imshow(denormalize(img_array))
-        axes[i][0].set_title(f"True: {label} | Pred: {pred_class}", color=color)
-        axes[i][0].axis("off")
-
-        axes[i][1].imshow(saliency, cmap="hot")
-        axes[i][1].set_title("Saliency (w.r.t. true class)")
-        axes[i][1].axis("off")
-
-    plt.tight_layout()
-    plt.savefig(os.path.join(save_path, "saliency_output.png"), dpi=200, bbox_inches="tight")
-    plt.close(fig)
 
 
 # --- Occlusion --------------------------------------------------------------
@@ -366,8 +325,7 @@ def main(num_samples=5):
     X, _ = data
     indices = random.sample(range(len(X)), num_samples)
 
-    print("Plotting per-sample saliency, occlusion, Grad-CAM...")
-    plot_saliency_maps(model, data, indices, TASK04_DIR, num_samples=num_samples)
+    print("Plotting per-sample occlusion and Grad-CAM...")
     plot_occlusion_maps(model, data, indices, TASK04_DIR, num_samples=num_samples,
                         patch_size=16, stride=4)
     plot_gradcam(model, data, indices, TASK04_DIR, num_samples=num_samples)
