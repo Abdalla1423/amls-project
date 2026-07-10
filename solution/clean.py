@@ -28,18 +28,19 @@ CLEANED_PARQUET = os.path.join(TASK_DIR, "training_dataset.parquet")
 TIME_OUT = 600
 
 # Log gathered information to artifacts/task01/data_exploration_and_cleaning.txt
-def write_log(total_seen, total_saved, total_duplicates, total_file_errors, class_sizes, class_shapes, class_formats):
+def write_log(total_seen, total_saved, total_duplicates, total_file_errors,
+              label_conflicts, class_sizes, class_shapes, class_formats):
     class_0_sizes = class_sizes.get(0, [])
 
     class_0_count = len(class_0_sizes)
-    class_0_average = (sum(class_0_sizes) / class_0_count / 1024) 
+    class_0_average = (sum(class_0_sizes) / class_0_count / 1024) if class_0_count > 0 else 0.0
 
     class_1_sizes = []
     for label, sizes in class_sizes.items():
         if int(label) > 0:
             class_1_sizes.extend(sizes)
     class_1_count = len(class_1_sizes)
-    class_1_average = (sum(class_1_sizes) / class_1_count / 1024)
+    class_1_average = (sum(class_1_sizes) / class_1_count / 1024) if class_1_count > 0 else 0.0
 
     total = class_0_count + class_1_count
 
@@ -49,21 +50,26 @@ def write_log(total_seen, total_saved, total_duplicates, total_file_errors, clas
         file.write(f"Total samples saved:     {total_saved:,}\n")
         file.write(f"Total file errors:       {total_file_errors:,}\n")
         file.write(f"Total duplicates:        {total_duplicates:,}\n")
+        file.write(f"Duplicate label conflicts: {label_conflicts:,}\n")
 
         file.write("\n=== TARGET BINARY CLASS DISTRIBUTION ===\n")
-        file.write(f"Class 0 (REAL) - Count: {class_0_count} ({class_0_count/total * 100:.1f}%) | Average Size: {class_0_average:.2f} KB\n")
-        file.write(f"Class 1 (AI) - Count: {class_1_count} ({class_1_count/total * 100:.1f}%)| Average Size: {class_1_average:.2f} KB\n")
+        if total > 0:
+            file.write(f"Class 0 (REAL) - Count: {class_0_count} ({class_0_count/total * 100:.1f}%) | Average Size: {class_0_average:.2f} KB\n")
+            file.write(f"Class 1 (AI)   - Count: {class_1_count} ({class_1_count/total * 100:.1f}%) | Average Size: {class_1_average:.2f} KB\n")
+        else:
+            file.write("No samples saved (empty run or timeout before any writes).\n")
 
         file.write("\n=== CLASS DETAIL & PROPERTY ANALYSIS ===\n")
-        CLASSES = sorted(class_shapes.keys())
-        for label in CLASSES:
+        for label in sorted(class_shapes.keys()):
             widths = [s[0] for s in class_shapes[label]]
             heights = [s[1] for s in class_shapes[label]]
             sizes = class_sizes[label]
             count = len(widths)
+            if count == 0:
+                continue
 
             file.write(f"\nClass {label}\n")
-            file.write(f"   Count: {len(widths):,}\n")
+            file.write(f"   Count: {count:,}\n")
             file.write(f"   Avg Size: {sum(sizes)/count/1024:.2f} KB\n")
             file.write(f"   Avg Width: {sum(widths)/count:.2f}\n")
             file.write(f"   Avg Height: {sum(heights)/count:.2f}\n")
@@ -83,13 +89,14 @@ def clean_data(files, save_path, timeout_seconds):
         return img_hash, img
 
     writer = None
-    seen_hashes = set()
+    hash_to_label = {}
     timeout_triggered = False
 
     total_seen = 0
     total_saved = 0
     total_duplicates = 0
     total_file_errors = 0
+    label_conflicts = 0
 
     for f in files:
         print(f"Cleaning file {f}")
@@ -128,12 +135,14 @@ def clean_data(files, save_path, timeout_seconds):
                 print(f"Corrupt / Unreadable image skipping: {e}")
                 continue
 
-            if img_hash in seen_hashes:
+            if img_hash in hash_to_label:
                 total_duplicates += 1
                 file_duplicates += 1
+                if hash_to_label[img_hash] != label:
+                    label_conflicts += 1
                 continue
 
-            seen_hashes.add(img_hash)
+            hash_to_label[img_hash] = label
 
             class_shapes[label].append(img.size)  # (width, height)
             class_formats[label].append(img.mode)
@@ -166,7 +175,8 @@ def clean_data(files, save_path, timeout_seconds):
     if writer:
         writer.close()
 
-    write_log(total_seen, total_saved, total_duplicates, total_file_errors, class_sizes, class_shapes, class_formats)
+    write_log(total_seen, total_saved, total_duplicates, total_file_errors,
+              label_conflicts, class_sizes, class_shapes, class_formats)
 
 def main():
     parser = argparse.ArgumentParser()
