@@ -29,13 +29,6 @@ IMAGE_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(3, 1, 1)
 def set_random_seeds(seed=SEED):
     random.seed(seed)
     np.random.seed(seed)
-    try:
-        import torch
-        torch.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
-    except ImportError:
-        pass
-
 
 def preprocess_single_image(img_bytes, target_h=IMAGE_SIZE, target_w=IMAGE_SIZE):
     img = Image.open(io.BytesIO(img_bytes)).convert("RGB")

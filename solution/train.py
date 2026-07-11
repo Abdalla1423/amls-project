@@ -169,4 +169,4 @@ def main(lr=LR, wd=WD):
 
 if __name__ == "__main__":
     main()
-    # hyperparameter_tune(lrs=[0.005], wds=[0.0001])
+    # hyperparameter_tune(lrs=[0.01, 0.008, 0.006, 0.005, 0.004, 0.001], wds=[0.0001, 0.001, 0.01])

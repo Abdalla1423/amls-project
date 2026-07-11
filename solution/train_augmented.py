@@ -38,6 +38,8 @@ NUM_EPOCHS = 100
 LR = 0.005
 WD = 0.0001
 
+torch.set_num_interop_threads(1)
+
 TASK02_DIR = os.path.join(ARTIFACTS_DIR, "task02")
 TASK03_DIR = os.path.join(ARTIFACTS_DIR, "task03")
 LOG_FILE = os.path.join(TASK03_DIR, "augmented_training_log.txt")
