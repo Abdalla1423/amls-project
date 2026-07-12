@@ -38,6 +38,8 @@ NUM_EPOCHS = 50
 LR = 0.005
 WD = 0.0001
 
+torch.set_num_interop_threads(1)
+
 TASK02_DIR = os.path.join(ARTIFACTS_DIR, "task02")
 TASK03_DIR = os.path.join(ARTIFACTS_DIR, "task03")
 LOG_FILE = os.path.join(TASK03_DIR, "augmented_training_log.txt")
@@ -133,7 +135,7 @@ def initialize_model_and_optimizer(finetune, lr=LR, wd=WD, num_epochs=NUM_EPOCHS
         model.to(DEVICE)
         model.apply(init_weights)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
-    scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs)
+    scheduler = CosineAnnealingLR(optimizer, T_max=20)
     return model, optimizer, scheduler
 
 
