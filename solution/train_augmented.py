@@ -34,7 +34,7 @@ from common import (
 )
 
 TIME_OUT = 1800
-NUM_EPOCHS = 100
+NUM_EPOCHS = 50
 LR = 0.005
 WD = 0.0001
 
@@ -135,7 +135,7 @@ def initialize_model_and_optimizer(finetune, lr=LR, wd=WD, num_epochs=NUM_EPOCHS
         model.to(DEVICE)
         model.apply(init_weights)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
-    scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs)
+    scheduler = CosineAnnealingLR(optimizer, T_max=20)
     return model, optimizer, scheduler
 
 
