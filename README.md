@@ -20,6 +20,7 @@ amls-project/
 │   ├── predict.py                 # Task 1.2 – Inference → artifacts/task02/predictions.csv
 │   ├── train_augmented.py         # Task 1.3 – Augmented training
 │   ├── predict_augmented.py       # Task 1.3 – Inference → artifacts/task03/predictions.csv
+│   ├── common.py                  # Shared model, data loading, and evaluation utilities
 │   ├── data/                      # Dataset (read-only at runtime)
 │   │   ├── train/
 │   │   ├── calibration/
@@ -30,7 +31,11 @@ amls-project/
 │   └── artifacts/                 # Created at runtime (models, predictions)
 │       ├── task02/predictions.csv
 │       └── task03/predictions.csv
-└── README.md
+├── explainibility.py              # Task 1.4 – Explainability
+├── experiments.py
+├── README.md
+├── report.pdf                     # Report
+└── svm.py
 ```
 
 ## How to Run (Docker Desktop)
